@@ -13,7 +13,8 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        large_distance_thresh: int = 200,  # Threshold to define "really large" distance between driver and fin
+        color_thresh: int = 50,  # Color threshold to filter out non-fin surfaces
+        size_range: tuple = (1000, 10000),  # Expected size range for the fin's top surface
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -24,13 +25,14 @@ class HelicoilDepthCheck:
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
-        self.large_distance_thresh = large_distance_thresh
+        self.color_thresh = color_thresh
+        self.size_range = size_range
+        self.fin_top_color = None  # Placeholder for the fin's top surface color
         self.distances = []
         self.driver_hand_distances = []
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.detect_top_surface_flag = False  # Flag to control top surface detection
         self.previous_box = None  # Store the previous yellow box
 
     def _load_model(self, model_path: str) -> YOLO:
@@ -44,12 +46,22 @@ class HelicoilDepthCheck:
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
+            # Sample the color of the fin's top surface
+            self.fin_top_color = self._sample_color(frame, self.fin_coordinates)
             # Draw the interpolated points as circles on the frame
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
+
+    def _sample_color(self, frame: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
+        """Sample the color from the center of the detected fin area"""
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        points = coordinates.reshape(-1, 2).astype(np.int32)
+        cv2.fillPoly(mask, [points], 255)
+        mean_color = cv2.mean(frame, mask=mask)[:3]  # BGR color
+        return np.array(mean_color)
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
@@ -138,8 +150,8 @@ class HelicoilDepthCheck:
 
         self.total_frames_checked += 1
 
-        # Detect top surface if flag is enabled and fin is detected
-        if self.detect_top_surface_flag or self._is_large_distance_to_fin(driver_coords):
+        # Detect top surface if flag is enabled
+        if self.fin_coordinates is not None:
             self._detect_top_surface(frame)
 
         # Draw the previous box if it exists
@@ -172,45 +184,42 @@ class HelicoilDepthCheck:
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
 
-            if self.previous_box is None:
-                self.previous_box = box
-            else:
-                prev_box_area = cv2.contourArea(self.previous_box)
-                new_box_orientation = rect[2]
-                prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
-
-                # Replace the box if the new one is smaller or has a different orientation
-                if new_box_area < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5):
+            # Filter based on size and color consistency
+            if self._is_valid_top_surface(box, new_box_area, frame):
+                if self.previous_box is None or self._should_replace_box(box, new_box_area):
                     self.previous_box = box
-                    print("Replaced the previous box with a smaller or differently oriented one.")
-                else:
-                    print("Kept the previous box.")
-
-            # Ensure the yellow box is within the fin area and that the distance to the fin is large
-            if self._is_box_within_fin(box, driver_coords=self._find_driver(frame)):
+                    print("Updated the previous box based on size and color consistency.")
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                 print("Top surface detected and annotated.")
 
-    def _is_large_distance_to_fin(self, driver_coords: list[int]) -> bool:
-        """Check if the distance between the driver and the fin is large."""
-        if driver_coords and self.fin_coordinates is not None:
-            min_distance_to_fin = np.min(self._compute_distance_to_fin(driver_coords))
-            return min_distance_to_fin > self.large_distance_thresh
-        return False
-
-    def _is_box_within_fin(self, box: np.ndarray, driver_coords: list[int]) -> bool:
-        """Check if the yellow box is within the fin area when the distance between driver and fin is large."""
-        if self.fin_coordinates is None or driver_coords is None:
+    def _is_valid_top_surface(self, box: np.ndarray, area: float, frame: np.ndarray) -> bool:
+        """Check if the detected top surface is valid based on size and color."""
+        if not (self.size_range[0] <= area <= self.size_range[1]):
+            print(f"Detected area {area} is out of size range.")
             return False
 
-        # Ensure the distance between the driver and fin is large
-        if self._is_large_distance_to_fin(driver_coords):
-            for point in box:
-                if not cv2.pointPolygonTest(self.fin_coordinates, tuple(point), False) >= 0:
-                    return False
+        # Check color consistency with the sampled fin top color
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        cv2.drawContours(mask, [box], 0, 255, -1)
+        mean_color = cv2.mean(frame, mask=mask)[:3]
+        color_diff = np.linalg.norm(np.array(mean_color) - self.fin_top_color)
+        if color_diff > self.color_thresh:
+            print(f"Color difference {color_diff} exceeds threshold.")
+            return False
+
+        return True
+
+    def _should_replace_box(self, box: np.ndarray, area: float) -> bool:
+        """Determine if the previous box should be replaced with the new one."""
+        if self.previous_box is None:
             return True
 
-        return False
+        prev_box_area = cv2.contourArea(self.previous_box)
+        new_box_orientation = cv2.minAreaRect(box)[2]
+        prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
+
+        # Replace the box if the new one is smaller or has a different orientation
+        return area < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
