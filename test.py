@@ -13,6 +13,7 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
+        large_distance_thresh: int = 200,  # Threshold to define "really large" distance between driver and fin
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -23,12 +24,14 @@ class HelicoilDepthCheck:
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
+        self.large_distance_thresh = large_distance_thresh
         self.distances = []
         self.driver_hand_distances = []
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
         self.detect_top_surface_flag = False  # Flag to control top surface detection
+        self.previous_box = None  # Store the previous yellow box
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -121,11 +124,6 @@ class HelicoilDepthCheck:
                 self.driver_hand_distances.append({"Time (seconds)": timestamp, "Driver-Hand Distance (pixels)": driver_hand_distance})
                 print(f"Distance between driver and hand: {driver_hand_distance} pixels")
 
-                # Check if the driver is within the threshold distance of the hand
-                if driver_hand_distance <= self.driver_hand_thresh:
-                    self.frames_with_driver_hand_within_thresh += 1
-                    self.detect_top_surface_flag = False  # Stop detecting top surface if driver is close
-
             # Compute distances between driver and each fin point
             distances_to_fin = self._compute_distance_to_fin(driver_coords)
             if len(distances_to_fin) > 0:
@@ -138,15 +136,15 @@ class HelicoilDepthCheck:
             self.fin_point_hits.append(hits)
             print(f"Number of fin points 'hit' by the driver: {hits}")
 
-        else:
-            # If the driver is far from the fin and hand, enable top surface detection
-            self.detect_top_surface_flag = True
-
         self.total_frames_checked += 1
 
-        # Detect top surface if flag is enabled
-        if self.detect_top_surface_flag:
+        # Detect top surface if flag is enabled and fin is detected
+        if self.detect_top_surface_flag or self._is_large_distance_to_fin(driver_coords):
             self._detect_top_surface(frame)
+
+        # Draw the previous box if it exists
+        if self.previous_box is not None:
+            cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
 
     def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
         """Compute distances between the driver and each point on the fin outline"""
@@ -172,8 +170,47 @@ class HelicoilDepthCheck:
             rect = cv2.minAreaRect(largest_contour)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
-            cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)
-            print("Top surface detected and annotated.")
+            new_box_area = cv2.contourArea(box)
+
+            if self.previous_box is None:
+                self.previous_box = box
+            else:
+                prev_box_area = cv2.contourArea(self.previous_box)
+                new_box_orientation = rect[2]
+                prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
+
+                # Replace the box if the new one is smaller or has a different orientation
+                if new_box_area < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5):
+                    self.previous_box = box
+                    print("Replaced the previous box with a smaller or differently oriented one.")
+                else:
+                    print("Kept the previous box.")
+
+            # Ensure the yellow box is within the fin area and that the distance to the fin is large
+            if self._is_box_within_fin(box, driver_coords=self._find_driver(frame)):
+                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                print("Top surface detected and annotated.")
+
+    def _is_large_distance_to_fin(self, driver_coords: list[int]) -> bool:
+        """Check if the distance between the driver and the fin is large."""
+        if driver_coords and self.fin_coordinates is not None:
+            min_distance_to_fin = np.min(self._compute_distance_to_fin(driver_coords))
+            return min_distance_to_fin > self.large_distance_thresh
+        return False
+
+    def _is_box_within_fin(self, box: np.ndarray, driver_coords: list[int]) -> bool:
+        """Check if the yellow box is within the fin area when the distance between driver and fin is large."""
+        if self.fin_coordinates is None or driver_coords is None:
+            return False
+
+        # Ensure the distance between the driver and fin is large
+        if self._is_large_distance_to_fin(driver_coords):
+            for point in box:
+                if not cv2.pointPolygonTest(self.fin_coordinates, tuple(point), False) >= 0:
+                    return False
+            return True
+
+        return False
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
