@@ -167,9 +167,9 @@ class HelicoilDepthCheck:
         
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            hull = cv2.convexHull(largest_contour)  # Use convexHull to ensure valid contour shape
 
-            if len(hull) >= 5:  # Ensure there are enough points to form a valid contour
+            if len(largest_contour) >= 5:  # Ensure there are enough points to form a valid contour
+                hull = cv2.convexHull(largest_contour.astype(np.float32))  # Convert contour to float32 for convexHull
                 rect = cv2.minAreaRect(hull)
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
