@@ -154,7 +154,11 @@ class HelicoilDepthCheck:
         return np.array([])
 
     def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it."""
+        """Detect the top surface of the fin and annotate it, but only if the fin is detected."""
+        if self.fin_coordinates is None:
+            print("Fin not detected, skipping top surface detection.")
+            return
+
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -171,29 +175,26 @@ class HelicoilDepthCheck:
             print(f"Detected box area: {new_box_area} pixels")
 
             # Ensure the yellow box is within the fin's box and has the same orientation
-            if self.fin_coordinates is not None:
-                fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
-                fin_box = cv2.boxPoints(fin_rect)
-                fin_box = np.int0(fin_box)
+            fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
+            fin_box = cv2.boxPoints(fin_rect)
+            fin_box = np.int0(fin_box)
 
-                if self._is_box_inside(fin_box, box) and np.isclose(fin_rect[2], rect[2], atol=5):
-                    if self.min_surface_size <= new_box_area <= self.max_surface_size:
-                        if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
-                            self.previous_box = box
-                            print("Updated the previous box based on hand distance, surface size, and orientation.")
-                        cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                        print("Top surface detected and annotated.")
-                    else:
-                        print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
-
-                        # Draw the previous box if the new one isn't valid
-                        if self.previous_box is not None:
-                            cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                            print("Persisting previous yellow box due to size constraint.")
+            if self._is_box_inside(fin_box, box) and np.isclose(fin_rect[2], rect[2], atol=5):
+                if self.min_surface_size <= new_box_area <= self.max_surface_size:
+                    if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
+                        self.previous_box = box
+                        print("Updated the previous box based on hand distance, surface size, and orientation.")
+                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                    print("Top surface detected and annotated.")
                 else:
-                    print("Yellow box is not inside the fin's box or does not have the same orientation. Skipping update.")
+                    print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
+
+                    # Draw the previous box if the new one isn't valid
+                    if self.previous_box is not None:
+                        cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                        print("Persisting previous yellow box due to size constraint.")
             else:
-                print("Fin not detected. Unable to determine box orientation and position.")
+                print("Yellow box is not inside the fin's box or does not have the same orientation. Skipping update.")
         else:
             print("No contours detected. Unable to detect the top surface.")
 
