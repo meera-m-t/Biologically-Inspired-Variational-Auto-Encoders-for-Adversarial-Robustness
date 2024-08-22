@@ -158,7 +158,7 @@ class HelicoilDepthCheck:
             self.previous_box = None
             print("Removed yellow bounding box as no fin, driver, or hand is detected.")
             return
-
+    
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -167,9 +167,10 @@ class HelicoilDepthCheck:
         
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-
+            
             if len(largest_contour) >= 5:  # Ensure there are enough points to form a valid contour
-                hull = cv2.convexHull(largest_contour.astype(np.float32))  # Convert contour to float32 for convexHull
+                # Convert the contour to float32 before applying convexHull
+                hull = cv2.convexHull(largest_contour.astype(np.float32))
                 rect = cv2.minAreaRect(hull)
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
@@ -183,7 +184,7 @@ class HelicoilDepthCheck:
                 fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
                 fin_box = cv2.boxPoints(fin_rect)
                 fin_box = np.int0(fin_box)
-
+    
                 if self._is_box_within_fin(self.previous_box, fin_box):
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                     print("Top surface detected and annotated.")
@@ -206,6 +207,10 @@ class HelicoilDepthCheck:
             elif self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                 print("No contour found. Persisting previous yellow box.")
+
+        
+    
+
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
         """Determine if the previous box should be replaced with the new one based on orientation change."""
