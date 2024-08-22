@@ -19,19 +19,15 @@ class HelicoilDepthCheck:
     def _load_model(self, model_path):
         return YOLO(model_path)
         
-    def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
-        """Find the fins' borders"""
+  
+    def _find_fin(self, frame, imgsz=640, conf=0.25):
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            self.fin_coordinates = self._interpolate_polygon_points(
-                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
-            )
-            # Draw the interpolated points as circles on the frame
-            for point in self.fin_coordinates:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
+        if detections and hasattr(detections[0], 'boxes') and len(detections[0].boxes.xyxy.cpu().numpy()) > 0:
+            box = detections[0].boxes.xyxy.cpu().numpy()[0]
+            self.fin_coordinates = self._interpolate_polygon_points(box)  # Assuming box is appropriate input
         else:
             self.fin_coordinates = None
-            print("No fins detected.")
+
 
     def _find_driver(self, frame, imgsz=1024, conf=0.25):
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
