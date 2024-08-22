@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd
 from ultralytics import YOLO
 
 class HelicoilDepthCheck:
@@ -15,18 +16,21 @@ class HelicoilDepthCheck:
         self.fin_coordinates = None
         self.previous_box = None
         self.hand_close_to_fin = False
+        self.distances = []
+        self.driver_hand_distances = []
+        self.fin_point_hits = []
+        self.frames_with_driver_hand_within_thresh = 0
+        self.total_frames_checked = 0
 
     def _load_model(self, model_path):
         return YOLO(model_path)
 
     def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
-        """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            # Draw the interpolated points as circles on the frame
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
         else:
@@ -61,7 +65,6 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _detect_top_surface(self, frame):
-        """Detect the top surface of the fin and annotate it"""
         if self.fin_coordinates and self.hand_close_to_fin:
             hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             lower_white = np.array([0, 0, 200])
@@ -74,7 +77,6 @@ class HelicoilDepthCheck:
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
 
-                # Ensure the yellow box is within the fin's area and aligned with its orientation
                 if self.previous_box is None or (self._is_box_within_fin(box) and self._should_replace_box(box)):
                     self.previous_box = box
 
@@ -93,7 +95,6 @@ class HelicoilDepthCheck:
         return not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
 
     def _is_box_within_fin(self, box):
-        """Check if the yellow box is within the fin area and has the same orientation"""
         fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
         fin_box = cv2.boxPoints(fin_rect)
         fin_box = np.int0(fin_box)
@@ -124,13 +125,48 @@ class HelicoilDepthCheck:
         elif self.fin_coordinates is None or not self.hand_close_to_fin:
             self.previous_box = None
 
+        if driver_coords:
+            distances_to_fin = self._compute_distance_to_fin(driver_coords)
+            if len(distances_to_fin) > 0:
+                min_distance = np.min(distances_to_fin)
+                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
+                print(f"Minimum distance between driver and fin: {min_distance} pixels")
+
+            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
+            self.fin_point_hits.append(hits)
+            print(f"Number of fin points 'hit' by the driver: {hits}")
+
+        self.total_frames_checked += 1
+
     def _compute_distance_to_fin(self, coords):
         if coords and self.fin_coordinates is not None:
             return np.sqrt(np.sum((np.array(self.fin_coordinates) - np.array(coords)) ** 2, axis=1))
         return np.array([])
 
+    def final_decision(self):
+        if len(self.fin_point_hits) > 0:
+            majority_hits = np.mean(self.fin_point_hits)
+            print(f"Average number of fin points 'hit': {majority_hits}")
+
+            driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
+            print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
+
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
+                print("Final Decision: Helicoil depth check passed.")
+                return True
+
+        print("Final Decision: Helicoil depth check failed.")
+        return False
+
     def save_distances_to_csv(self, output_csv_path):
-        pass  # Implement this method as needed
+        df = pd.DataFrame(self.distances)
+        df_hand = pd.DataFrame(self.driver_hand_distances)
+
+        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
+        df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
+
+        df_combined.to_csv(output_csv_path, index=False)
+        print(f"Distances and driver-hand distances saved to {output_csv_path}")
 
 if __name__ == "__main__":
     helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
