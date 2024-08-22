@@ -109,7 +109,7 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
-        """Determine if the operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
+        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
@@ -153,10 +153,12 @@ class HelicoilDepthCheck:
 
     def _detect_top_surface(self, frame: np.ndarray):
         """Detect the top surface of the fin and annotate it"""
-        if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
-            # Remove yellow box if no fin, driver, or hand is detected
-            self.previous_box = None
-            print("Removed yellow bounding box as no fin, driver, or hand is detected.")
+        # Ensure the yellow box is only detected when the hand and driver are not detected
+        if self.fin_coordinates is None or not self.hand_far_from_fin or self.previous_box is None:
+            if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
+                # Remove yellow box if no fin, driver, or hand is detected
+                self.previous_box = None
+                print("Removed yellow bounding box as no fin, driver, or hand is detected.")
             return
 
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -172,39 +174,26 @@ class HelicoilDepthCheck:
                 rect = cv2.minAreaRect(largest_contour)  # Directly use the contour for minAreaRect
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
-                
-                # Draw the box if it passes basic validation
-                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
-                    self.previous_box = box
-                    print("Updated the previous box based on hand distance and surface size.")
-                
+
                 # Ensure the yellow box is within the fin's area and aligned with its orientation
                 fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
                 fin_box = cv2.boxPoints(fin_rect)
                 fin_box = np.int0(fin_box)
 
+                if self.previous_box is None or (self._is_box_within_fin(box, fin_box) and self.hand_far_from_fin and self._should_replace_box(box)):
+                    self.previous_box = box
+                    print("Updated the previous box based on hand distance and surface size.")
+                
                 if self._is_box_within_fin(self.previous_box, fin_box):
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                     print("Top surface detected and annotated.")
-                else:
-                    print("Yellow box is not within the fin area. Keeping the previous valid box.")
-                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
             else:
                 print("Detected contour does not have enough points.")
-                
-                # Draw the previous box if the new one isn't valid
-                if self.previous_box is not None:
-                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                    print("Persisting previous yellow box due to size constraint.")
         else:
             # Remove yellow box if no fin, driver, or hand is detected
             if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
                 self.previous_box = None
                 print("Removed yellow bounding box as no fin, driver, or hand is detected.")
-            # Draw the previous box if no contour is found
-            elif self.previous_box is not None:
-                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                print("No contour found. Persisting previous yellow box.")
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
         """Determine if the previous box should be replaced with the new one based on orientation change."""
