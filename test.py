@@ -12,9 +12,8 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        width_target: int = 350,  # Target width for the valid top surface
-        height_target: int = 600,  # Target height for the valid top surface
-        size_tolerance: int = 10,  # Tolerance for width and height
+        min_surface_size: int = 215000,  # Minimum size for a valid top surface
+        max_surface_size: int = 215300,  # Maximum size for a valid top surface
         hand_far_thresh: int = 500,  # Distance threshold to consider hand far from the fin
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
@@ -24,16 +23,15 @@ class HelicoilDepthCheck:
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
-        self.width_target = width_target
-        self.height_target = height_target
-        self.size_tolerance = size_tolerance
+        self.min_surface_size = min_surface_size
+        self.max_surface_size = max_surface_size
         self.hand_far_thresh = hand_far_thresh
         self.distances = []
         self.driver_hand_distances = []
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.previous_box = None  # Store the previous white box
+        self.previous_box = None  # Store the previous yellow box
         self.hand_far_from_fin = True  # Flag to check if hand is far from fin
 
     def _load_model(self, model_path: str) -> YOLO:
@@ -159,93 +157,101 @@ class HelicoilDepthCheck:
 
     def _detect_top_surface(self, frame: np.ndarray):
         """Detect the top surface of the fin and annotate it"""
+        if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
+            # Remove yellow box if no fin, driver, or hand is detected
+            self.previous_box = None
+            print("Removed yellow bounding box as no fin, driver, or hand is detected.")
+            return
+
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
         mask = cv2.inRange(hsv_frame, lower_white, upper_white)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
             rect = cv2.minAreaRect(largest_contour)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
-            
-            # Calculate width and height
-            width = rect[1][0]
-            height = rect[1][1]
 
-            # Print the width and height of the box created
-            print(f"Detected box width: {width} pixels, height: {height} pixels")
+            # Adjust box to have sharp 90-degree corners
+            rect_points = cv2.boxPoints(cv2.minAreaRect(box))
+            rect_points = np.int0(rect_points)
 
-            # Filter based on width and height conditions
-            if (
-                self.width_target - self.size_tolerance <= width <= self.width_target + self.size_tolerance
-                and self.height_target - self.size_tolerance <= height <= self.height_target + self.size_tolerance
-            ):
-                if self.previous_box is None or self._should_replace_box(box):
-                    self.previous_box = box
-                    print("Updated the previous box based on size conditions.")
+            # Filter based on size condition
+            if self.min_surface_size <= new_box_area <= self.max_surface_size:
+                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(rect_points)):
+                    self.previous_box = rect_points
+                    print("Updated the previous box based on hand distance and surface size.")
                 
-                # Draw the box with white color
-                white_color = (255, 255, 255)  # RGB for white
-                cv2.drawContours(frame, [self.previous_box], 0, white_color, 2)
-                print("Top surface detected and annotated.")
-            else:
-                print(f"Detected box size (width: {width}, height: {height}) is out of the accepted range.")
+                # Ensure the yellow box is within the fin's area and aligned with its orientation
+                fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
+                fin_box = cv2.boxPoints(fin_rect)
+                fin_box = np.int0(fin_box)
 
+                if self._is_box_within_fin(self.previous_box, fin_box):
+                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                    print("Top surface detected and annotated.")
+                else:
+                    print("Yellow box is not within the fin area. Keeping the previous valid box.")
+                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+            else:
+                print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
+                
                 # Draw the previous box if the new one isn't valid
                 if self.previous_box is not None:
-                    white_color = (255, 255, 255)
-                    cv2.drawContours(frame, [self.previous_box], 0, white_color, 2)
-                    print("Persisting previous box due to size constraint.")
+                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                    print("Persisting previous yellow box due to size constraint.")
+        else:
+            # Remove yellow box if no fin, driver, or hand is detected
+            if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
+                self.previous_box = None
+                print("Removed yellow bounding box as no fin, driver, or hand is detected.")
+            # Draw the previous box if no contour is found
+            elif self.previous_box is not None:
+                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                print("No contour found. Persisting previous yellow box.")
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
-        """Determine if the previous box should be replaced with the new one based on orientation and size."""
+        """Determine if the previous box should be replaced with the new one based on orientation change."""
         if self.previous_box is None:
             return True
 
-        prev_box_area = cv2.contourArea(self.previous_box)
-        new_box_orientation = cv2.minAreaRect(box)[2]
         prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
+        new_box_orientation = cv2.minAreaRect(box)[2]
 
-        # Replace the box if the new one is smaller or has a different orientation
-        return cv2.contourArea(box) < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
+        # Replace the box if the fin's orientation has significantly changed
+        return not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
+
+    def _is_box_within_fin(self, box: np.ndarray, fin_box: np.ndarray) -> bool:
+        """Check if the yellow box is within the fin area and has the same orientation"""
+        for point in box:
+            if not cv2.pointPolygonTest(fin_box, (point[0], point[1]), False) >= 0:
+                return False
+        return True
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
-        """Analyze each frame where the driver and hand are not detected."""
-        self._find_fin(frame)
+        """Analyze each frame where the driver is detected."""
+        self._check_operator(frame, timestamp)
         hand_coords_list = self._find_hands(frame)
-        driver_coords = self._find_driver(frame)
 
-        if not driver_coords and not hand_coords_list and self.fin_coordinates is not None:
-            # When neither driver nor hand is detected, but the fin is detected
-
-            # Detect the top surface and check orientation
-            self._detect_top_surface(frame)
-
-            if self.previous_box is not None:
-                # Check if the previous white box has the same orientation as the fin
-                fin_orientation = cv2.minAreaRect(self.fin_coordinates).angle
-                box_orientation = cv2.minAreaRect(self.previous_box).angle
-                if np.isclose(fin_orientation, box_orientation, atol=5):
-                    print("The white bounding box has the same orientation as the fin.")
-
-                    # Draw the box with yellow color if the orientation matches
-                    yellow_color = (0, 255, 255)  # RGB for yellow
-                    cv2.drawContours(frame, [self.previous_box], 0, yellow_color, 2)
-                else:
-                    print("The white bounding box does not have the same orientation as the fin.")
-
-                # Check if the white box is inside the fin's bounding box
-                if cv2.pointPolygonTest(self.fin_coordinates, tuple(self.previous_box[0]), False) >= 0:
-                    print("The white bounding box is inside the fin's bounding box.")
-                else:
-                    print("The white bounding box is not inside the fin's bounding box.")
+        # Check if the hand is far from the fin
+        if hand_coords_list and self.fin_coordinates is not None:
+            for hand_coords in hand_coords_list:
+                distances_to_fin = self._compute_distance_to_fin(hand_coords)
+                if len(distances_to_fin) > 0:
+                    min_distance_to_fin = np.min(distances_to_fin)
+                    if min_distance_to_fin > self.hand_far_thresh:
+                        self.hand_far_from_fin = True
+                    else:
+                        self.hand_far_from_fin = False
+                        break
         else:
-            print("Either driver or hand detected, or fin not detected properly.")
+            self.hand_far_from_fin = True  # Assume hand is far if not detected
 
-        self.total_frames_checked += 1
+        self._detect_top_surface(frame)
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
@@ -278,7 +284,6 @@ class HelicoilDepthCheck:
 
         df_combined.to_csv(output_csv_path, index=False)
         print(f"Distances and driver-hand distances saved to {output_csv_path}")
-
 
 if __name__ == "__main__":
     # Initialize model
