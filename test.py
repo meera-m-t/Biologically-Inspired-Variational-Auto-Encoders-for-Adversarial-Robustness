@@ -19,9 +19,7 @@ class HelicoilDepthCheck:
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
         self.driver_model = self._load_model(driver_detector_model_path)
-        self.point_checks = np.array(
-            [False] * (interpolation_points * 4 + 4)
-        )
+        self.point_checks = np.array([False] * (interpolation_points * 4 + 4))
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
@@ -282,6 +280,15 @@ if __name__ == "__main__":
 
         # Write the frame with visualization to the output video
         out.write(frame)
+
+    # After processing all frames, make the final decision
+    if helicoil_depth_check.final_decision():
+        print("Final Decision: Helicoil depth check passed.")
+    else:
+        print("Final Decision: Helicoil depth check failed.")
+
+    # Save the distances to a CSV file
+    helicoil_depth_check.save_distances_to_csv("distances.csv")
 
     cap.release()
     out.release()
