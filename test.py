@@ -11,8 +11,8 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        hand_far_thresh: int = 500,  # Distance threshold to consider hand far from the fin
+        driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
+        hand_far_thresh: int = 5000,  # Distance threshold to consider hand far from the fin
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -109,22 +109,25 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
-        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
+        """Determine if the operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
         if driver_coords and hand_coords_list:
             for hand_coords in hand_coords_list:
-                # Compute distance between driver and hand
-                driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
-                self.driver_hand_distances.append({"Time (seconds)": timestamp, "Driver-Hand Distance (pixels)": driver_hand_distance})
-                print(f"Distance between driver and hand: {driver_hand_distance} pixels")
+                distances_to_fin = self._compute_distance_to_fin(hand_coords)
+                if len(distances_to_fin) > 0:
+                    min_distance_to_fin = np.min(distances_to_fin)
+                    if min_distance_to_fin > self.hand_far_thresh:
+                        self.hand_far_from_fin = True
+                    else:
+                        self.hand_far_from_fin = False
+                        break
+        else:
+            self.hand_far_from_fin = True  # Assume hand is far if not detected
 
-                # Check if the driver is within the threshold distance of the hand
-                if driver_hand_distance <= self.driver_hand_thresh:
-                    self.frames_with_driver_hand_within_thresh += 1
-
+        if driver_coords:
             # Compute distances between driver and each fin point
             distances_to_fin = self._compute_distance_to_fin(driver_coords)
             if len(distances_to_fin) > 0:
@@ -139,12 +142,12 @@ class HelicoilDepthCheck:
 
         self.total_frames_checked += 1
 
-    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
-        """Compute distances between the driver and each point on the fin outline"""
-        if driver_coords and self.fin_coordinates is not None:
+    def _compute_distance_to_fin(self, coords: list[int]) -> np.ndarray:
+        """Compute distances between a point (driver or hand) and each point on the fin outline"""
+        if coords and self.fin_coordinates is not None:
             distances = np.sqrt(
                 np.sum(
-                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
+                    (np.array(self.fin_coordinates) - np.array(coords)) ** 2, axis=1
                 )
             )
             return distances
@@ -153,12 +156,12 @@ class HelicoilDepthCheck:
 
     def _detect_top_surface(self, frame: np.ndarray):
         """Detect the top surface of the fin and annotate it"""
-        # Ensure the yellow box is only detected when the hand and driver are not detected
+        # Ensure the yellow box is only detected when the driver is not detected and the hand is far from the fin
         if self.fin_coordinates is None or not self.hand_far_from_fin or self.previous_box is None:
             if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
-                # Remove yellow box if no fin, driver, or hand is detected
+                # Remove yellow box if no fin or driver is detected
                 self.previous_box = None
-                print("Removed yellow bounding box as no fin, driver, or hand is detected.")
+                print("Removed yellow bounding box as no fin or driver is detected.")
             return
 
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -180,20 +183,20 @@ class HelicoilDepthCheck:
                 fin_box = cv2.boxPoints(fin_rect)
                 fin_box = np.int0(fin_box)
 
-                if self.previous_box is None or (self._is_box_within_fin(box, fin_box) and self.hand_far_from_fin and self._should_replace_box(box)):
+                if self.previous_box is None or (self._is_box_within_fin(box, fin_box) and self._should_replace_box(box)):
                     self.previous_box = box
-                    print("Updated the previous box based on hand distance and surface size.")
-                
+                    print("Updated the previous box based on fin orientation and size.")
+
                 if self._is_box_within_fin(self.previous_box, fin_box):
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                     print("Top surface detected and annotated.")
             else:
                 print("Detected contour does not have enough points.")
         else:
-            # Remove yellow box if no fin, driver, or hand is detected
+            # Remove yellow box if no fin or driver is detected
             if self.fin_coordinates is None and not self.hand_far_from_fin and self.previous_box is not None:
                 self.previous_box = None
-                print("Removed yellow bounding box as no fin, driver, or hand is detected.")
+                print("Removed yellow bounding box as no fin or driver is detected.")
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
         """Determine if the previous box should be replaced with the new one based on orientation change."""
@@ -216,25 +219,10 @@ class HelicoilDepthCheck:
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
         self._check_operator(frame, timestamp)
-        hand_coords_list = self._find_hands(frame)
-
-        # Check if the hand is far from the fin
-        if hand_coords_list and self.fin_coordinates is not None:
-            for hand_coords in hand_coords_list:
-                distances_to_fin = self._compute_distance_to_fin(hand_coords)
-                if len(distances_to_fin) > 0:
-                    min_distance_to_fin = np.min(distances_to_fin)
-                    if min_distance_to_fin > self.hand_far_thresh:
-                        self.hand_far_from_fin = True
-                    else:
-                        self.hand_far_from_fin = False
-                        break
-        else:
-            self.hand_far_from_fin = True  # Assume hand is far if not detected
 
         self._detect_top_surface(frame)
 
-    def final_decision(self) -> bool:
+    def final_decision(self() -> bool):
         """Make the final decision based on driver-hand proximity and fin points hit."""
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
