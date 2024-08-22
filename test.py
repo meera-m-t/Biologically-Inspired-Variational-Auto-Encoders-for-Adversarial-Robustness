@@ -33,7 +33,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.previous_box = None  # Store the previous yellow box
+        self.previous_box = None  # Store the previous white box
         self.hand_far_from_fin = True  # Flag to check if hand is far from fin
 
     def _load_model(self, model_path: str) -> YOLO:
@@ -183,21 +183,21 @@ class HelicoilDepthCheck:
                 self.width_target - self.size_tolerance <= width <= self.width_target + self.size_tolerance
                 and self.height_target - self.size_tolerance <= height <= self.height_target + self.size_tolerance
             ):
-                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
+                if self.previous_box is None or self._should_replace_box(box):
                     self.previous_box = box
-                    print("Updated the previous box based on hand distance and size conditions.")
+                    print("Updated the previous box based on size conditions.")
                 
-                # Draw the box with metallic silver (more white) color
-                metallic_silver_color = (192, 192, 192)  # RGB for metallic silver with a white tint
-                cv2.drawContours(frame, [self.previous_box], 0, metallic_silver_color, 2)
+                # Draw the box with white color
+                white_color = (255, 255, 255)  # RGB for white
+                cv2.drawContours(frame, [self.previous_box], 0, white_color, 2)
                 print("Top surface detected and annotated.")
             else:
                 print(f"Detected box size (width: {width}, height: {height}) is out of the accepted range.")
 
                 # Draw the previous box if the new one isn't valid
                 if self.previous_box is not None:
-                    metallic_silver_color = (192, 192, 192)
-                    cv2.drawContours(frame, [self.previous_box], 0, metallic_silver_color, 2)
+                    white_color = (255, 255, 255)
+                    cv2.drawContours(frame, [self.previous_box], 0, white_color, 2)
                     print("Persisting previous box due to size constraint.")
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
@@ -213,25 +213,39 @@ class HelicoilDepthCheck:
         return cv2.contourArea(box) < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
-        """Analyze each frame where the driver is detected."""
-        self._check_operator(frame, timestamp)
+        """Analyze each frame where the driver and hand are not detected."""
+        self._find_fin(frame)
         hand_coords_list = self._find_hands(frame)
+        driver_coords = self._find_driver(frame)
 
-        # Check if the hand is far from the fin
-        if hand_coords_list and self.fin_coordinates is not None:
-            for hand_coords in hand_coords_list:
-                distances_to_fin = self._compute_distance_to_fin(hand_coords)
-                if len(distances_to_fin) > 0:
-                    min_distance_to_fin = np.min(distances_to_fin)
-                    if min_distance_to_fin > self.hand_far_thresh:
-                        self.hand_far_from_fin = True
-                    else:
-                        self.hand_far_from_fin = False
-                        break
+        if not driver_coords and not hand_coords_list and self.fin_coordinates is not None:
+            # When neither driver nor hand is detected, but the fin is detected
+
+            # Detect the top surface and check orientation
+            self._detect_top_surface(frame)
+
+            if self.previous_box is not None:
+                # Check if the previous white box has the same orientation as the fin
+                fin_orientation = cv2.minAreaRect(self.fin_coordinates).angle
+                box_orientation = cv2.minAreaRect(self.previous_box).angle
+                if np.isclose(fin_orientation, box_orientation, atol=5):
+                    print("The white bounding box has the same orientation as the fin.")
+
+                    # Draw the box with yellow color if the orientation matches
+                    yellow_color = (0, 255, 255)  # RGB for yellow
+                    cv2.drawContours(frame, [self.previous_box], 0, yellow_color, 2)
+                else:
+                    print("The white bounding box does not have the same orientation as the fin.")
+
+                # Check if the white box is inside the fin's bounding box
+                if cv2.pointPolygonTest(self.fin_coordinates, tuple(self.previous_box[0]), False) >= 0:
+                    print("The white bounding box is inside the fin's bounding box.")
+                else:
+                    print("The white bounding box is not inside the fin's bounding box.")
         else:
-            self.hand_far_from_fin = True  # Assume hand is far if not detected
+            print("Either driver or hand detected, or fin not detected properly.")
 
-        self._detect_top_surface(frame)
+        self.total_frames_checked += 1
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
