@@ -4,7 +4,7 @@ from ultralytics import YOLO
 
 class HelicoilDepthCheck:
     def __init__(self, fins_detector_model_path, hand_detector_model_path, driver_detector_model_path,
-                 interpolation_points=2, pixel_thresh=120, driver_hand_thresh=700, hand_far_thresh=5000):
+                 interpolation_points=2, pixel_thresh=120, driver_hand_thresh=800, hand_far_thresh=5000):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
         self.driver_model = self._load_model(driver_detector_model_path)
@@ -18,16 +18,20 @@ class HelicoilDepthCheck:
 
     def _load_model(self, model_path):
         return YOLO(model_path)
-        
-  
-    def _find_fin(self, frame, imgsz=640, conf=0.25):
+
+    def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
+        """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'boxes') and len(detections[0].boxes.xyxy.cpu().numpy()) > 0:
-            box = detections[0].boxes.xyxy.cpu().numpy()[0]
-            self.fin_coordinates = self._interpolate_polygon_points(box)  # Assuming box is appropriate input
+        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
+            self.fin_coordinates = self._interpolate_polygon_points(
+                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+            )
+            # Draw the interpolated points as circles on the frame
+            for point in self.fin_coordinates:
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
         else:
             self.fin_coordinates = None
-
+            print("No fins detected.")
 
     def _find_driver(self, frame, imgsz=1024, conf=0.25):
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
@@ -57,23 +61,25 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _detect_top_surface(self, frame):
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 30, 255])
-        mask = cv2.inRange(hsv_frame, lower_white, upper_white)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-            new_box_area = cv2.contourArea(box)
+        """Detect the top surface of the fin and annotate it"""
+        if self.fin_coordinates and self.hand_close_to_fin:
+            hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            lower_white = np.array([0, 0, 200])
+            upper_white = np.array([180, 30, 255])
+            mask = cv2.inRange(hsv_frame, lower_white, upper_white)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(largest_contour)
+                box = cv2.boxPoints(rect)
+                box = np.int0(box)
 
-            if self.previous_box is None or (not self.hand_close_to_fin and self._should_replace_box(box)):
-                self.previous_box = box
+                # Ensure the yellow box is within the fin's area and aligned with its orientation
+                if self.previous_box is None or (self._is_box_within_fin(box) and self._should_replace_box(box)):
+                    self.previous_box = box
 
-            if self.previous_box is not None:
-                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                if self.previous_box is not None:
+                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
         else:
             self.previous_box = None
 
@@ -81,11 +87,21 @@ class HelicoilDepthCheck:
         if self.previous_box is None:
             return True
 
-        prev_box_area = cv2.contourArea(self.previous_box)
         new_box_orientation = cv2.minAreaRect(box)[2]
         prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
 
         return not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
+
+    def _is_box_within_fin(self, box):
+        """Check if the yellow box is within the fin area and has the same orientation"""
+        fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
+        fin_box = cv2.boxPoints(fin_rect)
+        fin_box = np.int0(fin_box)
+
+        for point in box:
+            if not cv2.pointPolygonTest(fin_box, (point[0], point[1]), False) >= 0:
+                return False
+        return True
 
     def inspectHelicoilDepth(self, frame, timestamp):
         self._find_fin(frame)
@@ -97,7 +113,7 @@ class HelicoilDepthCheck:
                 distances_to_fin = self._compute_distance_to_fin(hand_coords)
                 if len(distances_to_fin) > 0:
                     min_distance_to_fin = np.min(distances_to_fin)
-                    self.hand_close_to_fin = min_distance_to_fin <= self.hand_far_thresh
+                    self.hand_close_to_fin = min_distance_to_fin > self.hand_far_thresh
                     if self.hand_close_to_fin:
                         break
         else:
