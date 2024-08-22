@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-import pandas as pd
 from ultralytics import YOLO
+import pandas as pd
 
 class HelicoilDepthCheck:
     def __init__(
@@ -33,11 +33,27 @@ class HelicoilDepthCheck:
     def _load_model(self, model_path):
         return YOLO(model_path)
 
+    def _interpolate_polygon_points(self, points: np.ndarray, additional_points: int = 2) -> np.ndarray:
+        """Interpolate points along the edges of a polygon to increase point density."""
+        new_points = []
+        for i in range(len(points)):
+            start_point = points[i]
+            end_point = points[(i + 1) % len(points)]
+
+            new_points.append([start_point[0], start_point[1]])
+            for j in range(1, additional_points + 1):
+                fraction = j / (additional_points + 1)
+                x = start_point[0] + (end_point[0] - start_point[0]) * fraction
+                y = start_point[1] + (end_point[1] - start_point[1]) * fraction
+                new_points.append([x, y])
+
+        return np.array(new_points)
+
     def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
             self.fin_coordinates = self._interpolate_polygon_points(
-                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+                detections[0].obb.xyxyxyxy.cpu().numpy()[0], self.interpolation_points
             )
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
