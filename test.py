@@ -155,8 +155,8 @@ class HelicoilDepthCheck:
 
     def _detect_top_surface(self, frame: np.ndarray):
         """Detect the top surface of the fin and annotate it, but only if the fin is detected."""
-        if self.fin_coordinates is None:
-            print("Fin not detected, skipping top surface detection.")
+        if self.fin_coordinates is None or len(self.fin_coordinates) == 0:
+            print("Fin not detected or coordinates are empty, skipping top surface detection.")
             return
 
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -164,37 +164,36 @@ class HelicoilDepthCheck:
         upper_white = np.array([180, 30, 255])
         mask = cv2.inRange(hsv_frame, lower_white, upper_white)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)  # Ensure that the input is a valid set of points
+            rect = cv2.minAreaRect(largest_contour)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
 
-            # Print the size of the box created
             print(f"Detected box area: {new_box_area} pixels")
 
-            # Ensure the yellow box is within the fin's box and has the same orientation
-            fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
-            fin_box = cv2.boxPoints(fin_rect)
-            fin_box = np.int0(fin_box)
+            if self.fin_coordinates is not None and len(self.fin_coordinates) > 0:
+                fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
+                fin_box = cv2.boxPoints(fin_rect)
+                fin_box = np.int0(fin_box)
 
-            if self._is_box_inside(fin_box, box) and np.isclose(fin_rect[2], rect[2], atol=5):
-                if self.min_surface_size <= new_box_area <= self.max_surface_size:
-                    if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
-                        self.previous_box = box
-                        print("Updated the previous box based on hand distance, surface size, and orientation.")
-                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                    print("Top surface detected and annotated.")
-                else:
-                    print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
-
-                    # Draw the previous box if the new one isn't valid
-                    if self.previous_box is not None:
+                if self._is_box_inside(fin_box, box) and np.isclose(fin_rect[2], rect[2], atol=5):
+                    if self.min_surface_size <= new_box_area <= self.max_surface_size:
+                        if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
+                            self.previous_box = box
+                            print("Updated the previous box based on hand distance, surface size, and orientation.")
                         cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                        print("Persisting previous yellow box due to size constraint.")
-            else:
-                print("Yellow box is not inside the fin's box or does not have the same orientation. Skipping update.")
+                        print("Top surface detected and annotated.")
+                    else:
+                        print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
+
+                        if self.previous_box is not None:
+                            cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+                            print("Persisting previous yellow box due to size constraint.")
+                else:
+                    print("Yellow box is not inside the fin's box or does not have the same orientation. Skipping update.")
         else:
             print("No contours detected. Unable to detect the top surface.")
 
@@ -214,7 +213,6 @@ class HelicoilDepthCheck:
         new_box_orientation = cv2.minAreaRect(box)[2]
         prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
 
-        # Replace the box if the new one is smaller or has a different orientation
         return cv2.contourArea(box) < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
@@ -222,7 +220,6 @@ class HelicoilDepthCheck:
         self._check_operator(frame, timestamp)
         hand_coords_list = self._find_hands(frame)
 
-        # Check if the hand is far from the fin
         if hand_coords_list and self.fin_coordinates is not None:
             for hand_coords in hand_coords_list:
                 distances_to_fin = self._compute_distance_to_fin(hand_coords)
@@ -234,7 +231,7 @@ class HelicoilDepthCheck:
                         self.hand_far_from_fin = False
                         break
         else:
-            self.hand_far_from_fin = True  # Assume hand is far if not detected
+            self.hand_far_from_fin = True
 
         self._detect_top_surface(frame)
 
@@ -244,11 +241,9 @@ class HelicoilDepthCheck:
             majority_hits = np.mean(self.fin_point_hits)
             print(f"Average number of fin points 'hit': {majority_hits}")
 
-            # Consider the driver's proximity to the hand in the decision
             driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
 
-            # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
                 print("Final Decision: Helicoil depth check passed.")
                 return True
@@ -261,10 +256,8 @@ class HelicoilDepthCheck:
         df = pd.DataFrame(self.distances)
         df_hand = pd.DataFrame(self.driver_hand_distances)
 
-        # Merge the distance and driver-hand distance DataFrames
         df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
 
-        # Rename columns for clarity
         df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
 
         df_combined.to_csv(output_csv_path, index=False)
@@ -287,7 +280,7 @@ if __name__ == "__main__":
         raise Exception("Error opening video file")
 
     frame_count = 0
-    fps = cap.get(cv2.CAP_PROP_FPS)  # Get the frames per second of the video
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
     while True:
         ret, frame = cap.read()
@@ -296,22 +289,18 @@ if __name__ == "__main__":
             break
 
         frame_count += 1
-        timestamp = frame_count / fps  # Calculate the time in seconds
+        timestamp = frame_count / fps
         print(f"Processing frame {frame_count} at {timestamp:.2f} seconds")
 
-        # Analyze each frame for helicoil depth check
         helicoil_depth_check.inspectHelicoilDepth(frame, timestamp)
 
-        # Write the frame with visualization to the output video
         out.write(frame)
 
-    # After processing all frames, make the final decision
     if helicoil_depth_check.final_decision():
         print("Final Decision: Helicoil depth check passed.")
     else:
         print("Final Decision: Helicoil depth check failed.")
 
-    # Save the distances to a CSV file
     helicoil_depth_check.save_distances_to_csv("distances.csv")
 
     cap.release()
