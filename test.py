@@ -222,7 +222,7 @@ class HelicoilDepthCheck:
 
         self._detect_top_surface(frame)
 
-    def final_decision(self() -> bool):
+    def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
@@ -246,7 +246,7 @@ class HelicoilDepthCheck:
         df_hand = pd.DataFrame(self.driver_hand_distances)
 
         # Merge the distance and driver-hand distance DataFrames
-        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
+        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1, ignore_index=True)
 
         # Rename columns for clarity
         df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
