@@ -167,19 +167,16 @@ class HelicoilDepthCheck:
         
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-            new_box_area = cv2.contourArea(box)
+            hull = cv2.convexHull(largest_contour)  # Use convexHull to ensure valid contour shape
 
-            # Adjust box to have sharp 90-degree corners
-            rect_points = cv2.boxPoints(cv2.minAreaRect(box))
-            rect_points = np.int0(rect_points)
-
-            # Draw the box if it passes basic validation (e.g., not too small)
-            if rect_points is not None:
-                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(rect_points)):
-                    self.previous_box = rect_points
+            if len(hull) >= 5:  # Ensure there are enough points to form a valid contour
+                rect = cv2.minAreaRect(hull)
+                box = cv2.boxPoints(rect)
+                box = np.int0(box)
+                
+                # Draw the box if it passes basic validation
+                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
+                    self.previous_box = box
                     print("Updated the previous box based on hand distance and surface size.")
                 
                 # Ensure the yellow box is within the fin's area and aligned with its orientation
@@ -194,7 +191,7 @@ class HelicoilDepthCheck:
                     print("Yellow box is not within the fin area. Keeping the previous valid box.")
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
             else:
-                print("Detected box area is too small or invalid.")
+                print("Detected contour does not have enough points.")
                 
                 # Draw the previous box if the new one isn't valid
                 if self.previous_box is not None:
