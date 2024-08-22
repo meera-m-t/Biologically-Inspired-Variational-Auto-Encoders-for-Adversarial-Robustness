@@ -166,7 +166,7 @@ class HelicoilDepthCheck:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
+            rect = cv2.minAreaRect(largest_contour)  # Ensure that the input is a valid set of points
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
