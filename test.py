@@ -12,8 +12,6 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        min_surface_size: int = 215000,  # Minimum size for a valid top surface
-        max_surface_size: int = 215300,  # Maximum size for a valid top surface
         hand_far_thresh: int = 500,  # Distance threshold to consider hand far from the fin
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
@@ -23,8 +21,6 @@ class HelicoilDepthCheck:
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
-        self.min_surface_size = min_surface_size
-        self.max_surface_size = max_surface_size
         self.hand_far_thresh = hand_far_thresh
         self.distances = []
         self.driver_hand_distances = []
@@ -180,8 +176,8 @@ class HelicoilDepthCheck:
             rect_points = cv2.boxPoints(cv2.minAreaRect(box))
             rect_points = np.int0(rect_points)
 
-            # Filter based on size condition
-            if self.min_surface_size <= new_box_area <= self.max_surface_size:
+            # Draw the box if it passes basic validation (e.g., not too small)
+            if rect_points is not None:
                 if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(rect_points)):
                     self.previous_box = rect_points
                     print("Updated the previous box based on hand distance and surface size.")
@@ -198,7 +194,7 @@ class HelicoilDepthCheck:
                     print("Yellow box is not within the fin area. Keeping the previous valid box.")
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
             else:
-                print(f"Detected box area {new_box_area} is out of the accepted range ({self.min_surface_size}-{self.max_surface_size}).")
+                print("Detected box area is too small or invalid.")
                 
                 # Draw the previous box if the new one isn't valid
                 if self.previous_box is not None:
