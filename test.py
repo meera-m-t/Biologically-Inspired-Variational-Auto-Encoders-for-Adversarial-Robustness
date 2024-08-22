@@ -4,8 +4,16 @@ import pandas as pd
 from ultralytics import YOLO
 
 class HelicoilDepthCheck:
-    def __init__(self, fins_detector_model_path, hand_detector_model_path, driver_detector_model_path,
-                 interpolation_points=2, pixel_thresh=120, driver_hand_thresh=800, hand_far_thresh=5000):
+    def __init__(
+        self,
+        fins_detector_model_path: str,
+        hand_detector_model_path: str,
+        driver_detector_model_path: str,
+        interpolation_points: int = 2,
+        pixel_thresh: int = 120,  # Threshold for fin point hit detection
+        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
+        hand_far_thresh: int = 5000,  # Distance threshold to consider hand far from the fin
+    ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
         self.driver_model = self._load_model(driver_detector_model_path)
@@ -37,10 +45,13 @@ class HelicoilDepthCheck:
             self.fin_coordinates = None
             print("No fins detected.")
 
+    def _extract_obb_points(self, obb: np.ndarray) -> np.ndarray:
+        return obb.reshape(-1, 2)
+
     def _find_driver(self, frame, imgsz=1024, conf=0.25):
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            points = detections[0].obb.xyxyxyxy.cpu().numpy()[0].reshape(-1, 2)
+            points = self._extract_obb_points(detections[0].obb.xyxyxyxy.cpu().numpy()[0])
             c_x = np.mean(points[:, 0])
             c_y = np.mean(points[:, 1])
             return [int(c_x), int(c_y)]
@@ -63,6 +74,35 @@ class HelicoilDepthCheck:
         if point1 and point2:
             return np.linalg.norm(np.array(point1) - np.array(point2))
         return float('inf')
+
+    def _check_operator(self, frame, timestamp):
+        self._find_fin(frame)
+        driver_coords = self._find_driver(frame)
+        hand_coords_list = self._find_hands(frame)
+
+        if hand_coords_list and self.fin_coordinates is not None:
+            for hand_coords in hand_coords_list:
+                distances_to_fin = self._compute_distance_to_fin(hand_coords)
+                if len(distances_to_fin) > 0:
+                    min_distance_to_fin = np.min(distances_to_fin)
+                    self.hand_close_to_fin = min_distance_to_fin > self.hand_far_thresh
+                    if self.hand_close_to_fin:
+                        break
+        else:
+            self.hand_close_to_fin = False
+
+        if driver_coords:
+            distances_to_fin = self._compute_distance_to_fin(driver_coords)
+            if len(distances_to_fin) > 0:
+                min_distance = np.min(distances_to_fin)
+                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
+                print(f"Minimum distance between driver and fin: {min_distance} pixels")
+
+            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
+            self.fin_point_hits.append(hits)
+            print(f"Number of fin points 'hit' by the driver: {hits}")
+
+        self.total_frames_checked += 1
 
     def _detect_top_surface(self, frame):
         if self.fin_coordinates and self.hand_close_to_fin:
@@ -105,38 +145,12 @@ class HelicoilDepthCheck:
         return True
 
     def inspectHelicoilDepth(self, frame, timestamp):
-        self._find_fin(frame)
-        driver_coords = self._find_driver(frame)
-        hand_coords_list = self._find_hands(frame)
-
-        if hand_coords_list and self.fin_coordinates is not None:
-            for hand_coords in hand_coords_list:
-                distances_to_fin = self._compute_distance_to_fin(hand_coords)
-                if len(distances_to_fin) > 0:
-                    min_distance_to_fin = np.min(distances_to_fin)
-                    self.hand_close_to_fin = min_distance_to_fin > self.hand_far_thresh
-                    if self.hand_close_to_fin:
-                        break
-        else:
-            self.hand_close_to_fin = False
+        self._check_operator(frame, timestamp)
 
         if self.fin_coordinates and self.hand_close_to_fin:
             self._detect_top_surface(frame)
         elif self.fin_coordinates is None or not self.hand_close_to_fin:
             self.previous_box = None
-
-        if driver_coords:
-            distances_to_fin = self._compute_distance_to_fin(driver_coords)
-            if len(distances_to_fin) > 0:
-                min_distance = np.min(distances_to_fin)
-                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
-                print(f"Minimum distance between driver and fin: {min_distance} pixels")
-
-            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
-            self.fin_point_hits.append(hits)
-            print(f"Number of fin points 'hit' by the driver: {hits}")
-
-        self.total_frames_checked += 1
 
     def _compute_distance_to_fin(self, coords):
         if coords and self.fin_coordinates is not None:
@@ -169,10 +183,14 @@ class HelicoilDepthCheck:
         print(f"Distances and driver-hand distances saved to {output_csv_path}")
 
 if __name__ == "__main__":
+    # Initialize model
     helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
 
+    # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
     cap = cv2.VideoCapture(example_video_path)
+
+    # Set up video writer to save output in MKV format
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     out = cv2.VideoWriter('output_with_visualization.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
 
@@ -180,7 +198,7 @@ if __name__ == "__main__":
         raise Exception("Error opening video file")
 
     frame_count = 0
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = cap.get(cv2.CAP_PROP_FPS)  # Get the frames per second of the video
 
     while True:
         ret, frame = cap.read()
@@ -189,11 +207,25 @@ if __name__ == "__main__":
             break
 
         frame_count += 1
-        timestamp = frame_count / fps
+        timestamp = frame_count / fps  # Calculate the time in seconds
+        print(f"Processing frame {frame_count} at {timestamp:.2f} seconds")
 
+        # Analyze each frame for helicoil depth check
         helicoil_depth_check.inspectHelicoilDepth(frame, timestamp)
+
+        # Write the frame with visualization to the output video
         out.write(frame)
+
+    # After processing all frames, make the final decision
+    if helicoil_depth_check.final_decision():
+        print("Final Decision: Helicoil depth check passed.")
+    else:
+        print("Final Decision: Helicoil depth check failed.")
+
+    # Save the distances to a CSV file
+    helicoil_depth_check.save_distances_to_csv("distances.csv")
 
     cap.release()
     out.release()
     cv2.destroyAllWindows()
+    print("Finished processing video.")
