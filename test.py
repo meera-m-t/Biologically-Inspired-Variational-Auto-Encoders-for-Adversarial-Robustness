@@ -64,9 +64,7 @@ class HelicoilDepthCheck:
         print("No driver detected.")
         return []
 
-    def _find_hands(
-        self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25
-    ) -> list[list[int]]:
+    def _find_hands(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[list[int]]:
         """Find the hand borders"""
         detections = self.hand_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         hand_coords = []
@@ -109,7 +107,7 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
-        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
+        """Determine if the operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
@@ -158,19 +156,18 @@ class HelicoilDepthCheck:
             self.previous_box = None
             print("Removed yellow bounding box as no fin, driver, or hand is detected.")
             return
-    
+
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
         mask = cv2.inRange(hsv_frame, lower_white, upper_white)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            
+
             if len(largest_contour) >= 5:  # Ensure there are enough points to form a valid contour
-                # Convert the contour to float32 before applying convexHull
-                hull = cv2.convexHull(largest_contour.astype(np.float32))
+                hull = cv2.convexHull(largest_contour)  # Use original integer type here
                 rect = cv2.minAreaRect(hull)
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
@@ -184,7 +181,7 @@ class HelicoilDepthCheck:
                 fin_rect = cv2.minAreaRect(np.array(self.fin_coordinates))
                 fin_box = cv2.boxPoints(fin_rect)
                 fin_box = np.int0(fin_box)
-    
+
                 if self._is_box_within_fin(self.previous_box, fin_box):
                     cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                     print("Top surface detected and annotated.")
@@ -207,10 +204,6 @@ class HelicoilDepthCheck:
             elif self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
                 print("No contour found. Persisting previous yellow box.")
-
-        
-    
-
 
     def _should_replace_box(self, box: np.ndarray) -> bool:
         """Determine if the previous box should be replaced with the new one based on orientation change."""
