@@ -64,7 +64,9 @@ class HelicoilDepthCheck:
         print("No driver detected.")
         return []
 
-    def _find_hands(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[list[int]]:
+    def _find_hands(
+        self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25
+    ) -> list[list[int]]:
         """Find the hand borders"""
         detections = self.hand_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         hand_coords = []
@@ -167,8 +169,7 @@ class HelicoilDepthCheck:
             largest_contour = max(contours, key=cv2.contourArea)
 
             if len(largest_contour) >= 5:  # Ensure there are enough points to form a valid contour
-                hull = cv2.convexHull(largest_contour)  # Use original integer type here
-                rect = cv2.minAreaRect(hull)
+                rect = cv2.minAreaRect(largest_contour)  # Directly use the contour for minAreaRect
                 box = cv2.boxPoints(rect)
                 box = np.int0(box)
                 
