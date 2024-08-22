@@ -101,7 +101,7 @@ class HelicoilDepthCheck:
                 distances_to_fin = self._compute_distance_to_fin(hand_coords)
                 if len(distances_to_fin) > 0:
                     min_distance_to_fin = np.min(distances_to_fin)
-                    self.hand_close_to_fin = min_distance_to_fin > self.hand_far_thresh
+                    self.hand_close_to_fin = min_distance_to_fin < self.hand_far_thresh
                     if self.hand_close_to_fin:
                         break
         else:
