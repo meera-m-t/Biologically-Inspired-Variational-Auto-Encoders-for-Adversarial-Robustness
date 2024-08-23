@@ -13,6 +13,7 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
+        class_mapping: dict = None  # Mapping from class index to class name
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -28,6 +29,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
+        self.class_mapping = class_mapping if class_mapping is not None else {0: "Small", 1: "Medium", 2: "Large"}
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -49,7 +51,11 @@ class HelicoilDepthCheck:
                 
                 for i in range(len(obb)):
                     fin_class = int(classes[i])  # Predicted class for the fin
+                    class_name = self.class_mapping.get(fin_class, "Unknown")
                     color = self._get_color_for_class(fin_class)  # Get color based on class
+                    
+                    # Print the class name
+                    print(f"Detected fin class: {class_name}")
                     
                     # Get the four corners of the OBB
                     box_points = obb[i].reshape(-1, 2)
@@ -60,7 +66,7 @@ class HelicoilDepthCheck:
                         cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=-1)
                     
                     # Optionally, display the class label on the frame
-                    label = f"Class: {fin_class}"
+                    label = f"{class_name}"
                     cv2.putText(frame, label, (int(box_points[0][0]), int(box_points[0][1]) - 10), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             else:
@@ -79,7 +85,7 @@ class HelicoilDepthCheck:
         else:  # Small
             return (0, 255, 0)  # Green
 
-    def _find_driver(self, frame: np.ndarray, imgsz: int = 1024, conf: float = 0.25) -> list[int]:
+    def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
@@ -209,6 +215,11 @@ class HelicoilDepthCheck:
         df = pd.DataFrame(self.distances)
         df_hand = pd.DataFrame(self.driver_hand_distances)
         
+        # Ensure both DataFrames have the same length by aligning them
+        max_length = max(len(df), len(df_hand))
+        df = df.reindex(range(max_length))
+        df_hand = df_hand.reindex(range(max_length))
+        
         # Merge the distance and driver-hand distance DataFrames
         df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
         
@@ -220,8 +231,16 @@ class HelicoilDepthCheck:
 
 
 if __name__ == "__main__":
+    # Example class mapping
+    class_mapping = {0: "Small", 1: "Medium", 2: "Large"}
+
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
+    helicoil_depth_check = HelicoilDepthCheck(
+        "models/fin_detector.pt", 
+        "models/hand_detector.pt", 
+        "models/driver.pt",
+        class_mapping=class_mapping
+    )
 
     # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
@@ -266,4 +285,3 @@ if __name__ == "__main__":
     out.release()
     cv2.destroyAllWindows()
     print("Finished processing video.")
-
