@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import pandas as pd
 from ultralytics import YOLO
 
 
@@ -29,7 +28,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.class_mapping = class_mapping if class_mapping is not None else {0: "Small", 1: "Medium", 2: "Large"}
+        self.class_mapping = class_mapping if class_mapping is not None else {0: "Large", 1: "Medium", 2: "Small"}
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -78,7 +77,7 @@ class HelicoilDepthCheck:
 
     def _get_color_for_class(self, fin_class: int) -> tuple:
         """Return color based on the fin class"""
-        if fin_class == 2:  # Large
+        if fin_class == 0:  # Large
             return (0, 0, 255)  # Red
         elif fin_class == 1:  # Medium
             return (0, 255, 255)  # Yellow
@@ -145,6 +144,18 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
+    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
+        """Compute distances between the driver and each point on the fin outline"""
+        if driver_coords and self.fin_coordinates is not None:
+            distances = np.sqrt(
+                np.sum(
+                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
+                )
+            )
+            return distances
+
+        return np.array([])
+
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
@@ -176,18 +187,6 @@ class HelicoilDepthCheck:
 
         self.total_frames_checked += 1
 
-    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
-        """Compute distances between the driver and each point on the fin outline"""
-        if driver_coords and self.fin_coordinates is not None:
-            distances = np.sqrt(
-                np.sum(
-                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
-                )
-            )
-            return distances
-
-        return np.array([])
-
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
         self._check_operator(frame, timestamp)
@@ -210,29 +209,10 @@ class HelicoilDepthCheck:
         print("Final Decision: Helicoil depth check failed.")
         return False
 
-    def save_distances_to_csv(self, output_csv_path: str):
-        """Save the distances and driver-hand distances to a CSV file"""
-        df = pd.DataFrame(self.distances)
-        df_hand = pd.DataFrame(self.driver_hand_distances)
-        
-        # Ensure both DataFrames have the same length by aligning them
-        max_length = max(len(df), len(df_hand))
-        df = df.reindex(range(max_length))
-        df_hand = df_hand.reindex(range(max_length))
-        
-        # Merge the distance and driver-hand distance DataFrames
-        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
-        
-        # Rename columns for clarity
-        df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
-        
-        df_combined.to_csv(output_csv_path, index=False)
-        print(f"Distances and driver-hand distances saved to {output_csv_path}")
-
 
 if __name__ == "__main__":
     # Example class mapping
-    class_mapping = {0: "Small", 1: "Medium", 2: "Large"}
+    class_mapping = {0: "Large", 1: "Medium", 2: "Small"}
 
     # Initialize model
     helicoil_depth_check = HelicoilDepthCheck(
@@ -277,9 +257,6 @@ if __name__ == "__main__":
         print("Final Decision: Helicoil depth check passed.")
     else:
         print("Final Decision: Helicoil depth check failed.")
-
-    # Save the distances to a CSV file
-    helicoil_depth_check.save_distances_to_csv("distances.csv")
 
     cap.release()
     out.release()
