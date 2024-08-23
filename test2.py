@@ -28,8 +28,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.stored_yellow_box = None  # To store the yellow rectangle
-        self.yellow_box_persist = False  # Flag to persist the yellow rectangle
+        self.yellow_rectangle_coords = None
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -59,9 +58,9 @@ class HelicoilDepthCheck:
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
 
-            # Only detect top surface and draw yellow box if no driver or hand is detected
-            if not self.yellow_box_persist:
-                self._detect_top_surface(frame)
+            # If the conditions are met, draw the yellow rectangle inside the fin
+            if self.yellow_rectangle_coords is not None:
+                self._draw_yellow_rectangle(frame)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -126,24 +125,36 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
+    def _draw_yellow_rectangle(self, frame: np.ndarray):
+        """Draw a yellow rectangle inside the fin, 10% smaller than the fin size"""
+        if self.fin_coordinates is not None:
+            rect = cv2.minAreaRect(self.fin_coordinates)
+            box = cv2.boxPoints(rect)
+            box = np.int0(box)
+
+            # Calculate the center and the size of the new rectangle
+            center_x, center_y = np.mean(box[:, 0]), np.mean(box[:, 1])
+            width, height = rect[1][0] * 0.9, rect[1][1] * 0.9  # Scale down by 10%
+
+            # Create the new smaller rectangle
+            new_rect = ((center_x, center_y), (width, height), rect[2])
+            new_box = cv2.boxPoints(new_rect)
+            new_box = np.int0(new_box)
+
+            # Draw the rectangle on the frame
+            cv2.drawContours(frame, [new_box], 0, (0, 255, 255), 2)
+
+            # Save the rectangle's coordinates to persist in future frames
+            self.yellow_rectangle_coords = new_box
+
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
-        if not driver_coords and not hand_coords_list:
-            # If no driver and hands detected, persist the yellow box
-            self.yellow_box_persist = True
-        else:
-            # Reset yellow box persistence when hand and driver are detected
-            self.yellow_box_persist = False
-            self.stored_yellow_box = None
-
-        if self.yellow_box_persist and self.stored_yellow_box is not None:
-            cv2.drawContours(frame, [self.stored_yellow_box], 0, (0, 255, 255), 2)  # Draw stored yellow rectangle
-
         if driver_coords and hand_coords_list:
+            self.yellow_rectangle_coords = None  # Reset yellow rectangle if driver or hand detected
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
@@ -165,6 +176,10 @@ class HelicoilDepthCheck:
             hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
             self.fin_point_hits.append(hits)
             print(f"Number of fin points 'hit' by the driver: {hits}")
+        else:
+            # No driver or hand detected, draw the yellow rectangle if a fin is detected
+            if self.fin_coordinates is not None:
+                self._draw_yellow_rectangle(frame)
 
         self.total_frames_checked += 1
 
@@ -179,51 +194,6 @@ class HelicoilDepthCheck:
             return distances
 
         return np.array([])
-
-    def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it, but only if the fin is detected and neither the hand nor the driver is detected."""
-        if self.fin_coordinates is None or len(self.fin_coordinates) == 0:
-            print("Fin not detected or coordinates are empty, skipping top surface detection.")
-            return
-
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 30, 255])
-        mask = cv2.inRange(hsv_frame, lower_white, upper_white)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-
-            # Calculate the area of the detected white rectangle
-            white_rect_area = cv2.contourArea(box)
-
-            # Calculate the area of the fin's bounding box
-            fin_bounding_box = cv2.boundingRect(np.array(self.fin_coordinates))
-            fin_area = fin_bounding_box[2] * fin_bounding_box[3]  # width * height
-
-            # Check if the white rectangle is a significant portion of the fin area (at least 80%)
-            if white_rect_area > 0.8 * fin_area and self._is_box_inside_fin(box):
-                cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)  # Draw yellow rectangle
-                self.stored_yellow_box = box  # Store the yellow box
-                self.yellow_box_persist = True  # Set flag to persist the yellow box
-            else:
-                print("Detected top surface is either too small or not inside the fin area.")
-        else:
-            print("No top surface detected.")
-
-    def _is_box_inside_fin(self, box: np.ndarray) -> bool:
-        """Check if the yellow box is inside the fin detection area."""
-        if self.fin_coordinates is None:
-            return False
-
-        for point in box:
-            if cv2.pointPolygonTest(self.fin_coordinates, tuple(point), False) < 0:
-                return False
-        return True
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
@@ -241,6 +211,7 @@ class HelicoilDepthCheck:
     
             # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
+                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
