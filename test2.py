@@ -33,9 +33,10 @@ class HelicoilDepthCheck:
         """Load model"""
         return YOLO(model_path)
 
-    def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
+    def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.15):
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
+        
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
