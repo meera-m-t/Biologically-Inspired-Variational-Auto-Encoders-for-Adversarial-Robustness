@@ -12,7 +12,7 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
+        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -28,8 +28,8 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.stored_yellow_box = None  # To store the yellow rectangle
-        self.yellow_box_persist = False  # Flag to persist the yellow rectangle
+        self.driver_coords = []
+        self.yellow_box_coords = None  # To keep track of the yellow box coordinates
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -39,29 +39,16 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
-            print("fin_class**************", fin_class)
-
-            # Assign color based on the fin class
-            if fin_class == 0:
-                color = (255, 0, 0)  # Blue
-            elif fin_class == 1:
-                color = (0, 255, 0)  # Green
-            elif fin_class == 2:
-                color = (0, 255, 255)  # Yellow
-            else:
-                color = (0, 0, 255)  # Red (default if unknown class)
-
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            # Draw the interpolated points as circles on the frame with the assigned color
+            # Draw the interpolated points as circles on the frame
             for point in self.fin_coordinates:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
 
-            # Only detect top surface and draw yellow box if no driver or hand is detected
-            if not self.yellow_box_persist:
-                self._detect_top_surface(frame)
+            # Draw yellow box if the driver is not detected
+            if not self.driver_coords:
+                self.yellow_box_coords = self._draw_yellow_box(frame)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -77,7 +64,7 @@ class HelicoilDepthCheck:
             print(f"Driver detected at ({c_x}, {c_y}).")
             # Draw the driver on the frame
             for point in points:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=-1)
             return [int(c_x), int(c_y)]
         print("No driver detected.")
         return []
@@ -103,7 +90,7 @@ class HelicoilDepthCheck:
         return obb.reshape(-1, 2)
 
     def _interpolate_polygon_points(self, points: np.ndarray, additional_points: int = 2) -> np.ndarray:
-        """Extrapolate points in a polygon. Retaining the shape"""
+        """Extrapolate points in a polygon, retaining the shape."""
         new_points = []
         for i in range(len(points)):
             start_point = points[i]
@@ -127,26 +114,15 @@ class HelicoilDepthCheck:
         return float('inf')
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
-        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
+        """Determine if the operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
-        driver_coords = self._find_driver(frame)
+        self.driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
-        if not driver_coords and not hand_coords_list:
-            # If no driver and hands detected, persist the yellow box
-            self.yellow_box_persist = True
-        else:
-            # Reset yellow box persistence when hand and driver are detected
-            self.yellow_box_persist = False
-            self.stored_yellow_box = None
-
-        if self.yellow_box_persist and self.stored_yellow_box is not None:
-            cv2.drawContours(frame, [self.stored_yellow_box], 0, (0, 255, 255), 2)  # Draw stored yellow rectangle
-
-        if driver_coords and hand_coords_list:
+        if self.driver_coords and hand_coords_list:
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
-                driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
+                driver_hand_distance = self._compute_distance(self.driver_coords, hand_coords)
                 self.driver_hand_distances.append({"Time (seconds)": timestamp, "Driver-Hand Distance (pixels)": driver_hand_distance})
                 print(f"Distance between driver and hand: {driver_hand_distance} pixels")
 
@@ -155,7 +131,7 @@ class HelicoilDepthCheck:
                     self.frames_with_driver_hand_within_thresh += 1
 
             # Compute distances between driver and each fin point
-            distances_to_fin = self._compute_distance_to_fin(driver_coords)
+            distances_to_fin = self._compute_distance_to_fin(self.driver_coords)
             if len(distances_to_fin) > 0:
                 min_distance = np.min(distances_to_fin)  # Store only the minimum distance
                 self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
@@ -168,8 +144,12 @@ class HelicoilDepthCheck:
 
         self.total_frames_checked += 1
 
+        # Draw the yellow box if it was set in previous frames
+        if self.yellow_box_coords and not self.driver_coords:
+            self._draw_existing_yellow_box(frame)
+
     def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
-        """Compute distances between the driver and each point on the fin outline"""
+        """Compute distances between the driver and each point on the fin outline."""
         if driver_coords and self.fin_coordinates is not None:
             distances = np.sqrt(
                 np.sum(
@@ -180,53 +160,47 @@ class HelicoilDepthCheck:
 
         return np.array([])
 
-    def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it, but only if the fin is detected and neither the hand nor the driver is detected."""
-        if self.fin_coordinates is None or len(self.fin_coordinates) == 0:
-            print("Fin not detected or coordinates are empty, skipping top surface detection.")
-            return
+    def _draw_yellow_box(self, frame: np.ndarray):
+        """Draw a yellow box similar to the fin box but 10% smaller from the left."""
+        if self.fin_coordinates is not None and len(self.fin_coordinates) >= 2:
+            # Get the left-most and right-most points (xmin, ymin) and (xmax, ymax)
+            xmin = np.min(self.fin_coordinates[:, 0])
+            ymin = np.min(self.fin_coordinates[:, 1])
+            xmax = np.max(self.fin_coordinates[:, 0])
+            ymax = np.max(self.fin_coordinates[:, 1])
 
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 30, 255])
-        mask = cv2.inRange(hsv_frame, lower_white, upper_white)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Calculate the width and height
+            width = xmax - xmin
+            height = ymax - ymin
 
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
+            # Calculate new coordinates for the yellow box
+            new_xmin = int(xmin + 0.1 * width)
+            new_xmax = xmax
+            new_ymin = ymin
+            new_ymax = ymax
 
-            # Calculate the area of the detected white rectangle
-            white_rect_area = cv2.contourArea(box)
+            # Draw the yellow box on the frame
+            cv2.rectangle(
+                frame, (new_xmin, new_ymin), (new_xmax, new_ymax), (0, 255, 255), 2
+            )
+            print("Yellow box drawn.")
 
-            # Calculate the area of the fin's bounding box
-            fin_bounding_box = cv2.boundingRect(np.array(self.fin_coordinates))
-            fin_area = fin_bounding_box[2] * fin_bounding_box[3]  # width * height
+            # Return the yellow box coordinates
+            return (new_xmin, new_ymin, new_xmax, new_ymax)
 
-            # Check if the white rectangle is a significant portion of the fin area (at least 80%)
-            if white_rect_area > 0.8 * fin_area and self._is_box_inside_fin(box):
-                cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)  # Draw yellow rectangle
-                self.stored_yellow_box = box  # Store the yellow box
-                self.yellow_box_persist = True  # Set flag to persist the yellow box
-            else:
-                print("Detected top surface is either too small or not inside the fin area.")
-        else:
-            print("No top surface detected.")
+        return None
 
-    def _is_box_inside_fin(self, box: np.ndarray) -> bool:
-        """Check if the yellow box is inside the fin detection area."""
-        if self.fin_coordinates is None:
-            return False
-
-        for point in box:
-            if cv2.pointPolygonTest(self.fin_coordinates, tuple(point), False) < 0:
-                return False
-        return True
+    def _draw_existing_yellow_box(self, frame: np.ndarray):
+        """Draw the yellow box that was set in previous frames."""
+        if self.yellow_box_coords is not None:
+            new_xmin, new_ymin, new_xmax, new_ymax = self.yellow_box_coords
+            cv2.rectangle(
+                frame, (new_xmin, new_ymin), (new_xmax, new_ymax), (0, 255, 255), 2
+            )
+            print("Persistent yellow box drawn.")
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
-        """Analyze each frame where the driver is detected."""
+        """Analyze each frame for helicoil depth check."""
         self._check_operator(frame, timestamp)
 
     def final_decision(self) -> bool:
@@ -234,29 +208,29 @@ class HelicoilDepthCheck:
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
             print(f"Average number of fin points 'hit': {majority_hits}")
-    
+
             # Consider the driver's proximity to the hand in the decision
             driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
-    
+
             # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
                 return True
-            
+
         print("Final Decision: Helicoil depth check failed.")
         return False
 
     def save_distances_to_csv(self, output_csv_path: str):
-        """Save the distances and driver-hand distances to a CSV file"""
+        """Save the distances and driver-hand distances to a CSV file."""
         df = pd.DataFrame(self.distances)
         df_hand = pd.DataFrame(self.driver_hand_distances)
-        
+
         # Merge the distance and driver-hand distance DataFrames
         df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
-        
+
         # Rename columns for clarity
         df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
-        
+
         df_combined.to_csv(output_csv_path, index=False)
         print(f"Distances and driver-hand distances saved to {output_csv_path}")
 
@@ -265,7 +239,7 @@ if __name__ == "__main__":
     # Initialize model
     helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
 
-    # This is just simulating grabbing frames from live stream
+    # This is just simulating grabbing frames from a live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
     cap = cv2.VideoCapture(example_video_path)
 
