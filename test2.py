@@ -121,13 +121,16 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
-    def _check_operator(self, frame: np.ndarray, timestamp: float):
+    def _check_operator(self, frame: np.ndarray, timestamp: float) -> bool:
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
+        driver_detected = False
+
         if driver_coords and hand_coords_list:
+            driver_detected = True
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
@@ -151,6 +154,7 @@ class HelicoilDepthCheck:
             print(f"Number of fin points 'hit' by the driver: {hits}")
 
         self.total_frames_checked += 1
+        return driver_detected
 
     def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
         """Compute distances between the driver and each point on the fin outline"""
@@ -163,8 +167,9 @@ class HelicoilDepthCheck:
             return distances
 
         return np.array([])
-    def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it if its area is less than the fin's size."""
+
+    def _detect_top_surface(self, frame: np.ndarray, driver_detected: bool):
+        """Detect the top surface of the fin and annotate it based on the presence of the driver and surface area."""
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -176,29 +181,32 @@ class HelicoilDepthCheck:
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
-    
+
             # Calculate the fin's bounding box area
             if self.fin_coordinates is not None:
                 fin_area = cv2.contourArea(np.int0(self.fin_coordinates))
+                min_area_threshold = 0.5 * fin_area
+                max_area_threshold = 0.95 * fin_area
             else:
                 fin_area = float('inf')  # Prevent any drawing if no fin is detected
-    
-            # Annotate if the detected surface area is less than the fin's area
-            if new_box_area <= fin_area:
+                min_area_threshold = float('-inf')  # Ensure no detection if no fin
+                max_area_threshold = float('inf')  # Ensure no detection if no fin
+
+            # Annotate if the detected surface area is within the required range
+            if not driver_detected and min_area_threshold <= new_box_area <= max_area_threshold:
                 self.previous_box = box
                 print("Top surface detected and annotated.")
             else:
-                print("Detected surface is larger than the fin's size. Persisting previous yellow box.")
+                print("Condition not met, persisting previous yellow box.")
                 
             # Draw the previous box if it exists
             if self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
 
-
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
-        self._check_operator(frame, timestamp)
-        self._detect_top_surface(frame)
+        driver_detected = self._check_operator(frame, timestamp)
+        self._detect_top_surface(frame, driver_detected)
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
@@ -212,7 +220,6 @@ class HelicoilDepthCheck:
     
             # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
-                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
