@@ -12,7 +12,7 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
+        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
         class_mapping: dict = None  # Mapping from class index to class name
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
