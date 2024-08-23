@@ -38,7 +38,7 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.numpy()[0])
+            fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
             print("fin_class**************", fin_class)
 
             # Assign color based on the fin class
