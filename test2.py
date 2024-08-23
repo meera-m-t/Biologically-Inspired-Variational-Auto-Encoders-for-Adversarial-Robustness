@@ -163,9 +163,8 @@ class HelicoilDepthCheck:
             return distances
 
         return np.array([])
-
     def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it with an adjusted minimum and maximum size condition."""
+        """Detect the top surface of the fin and annotate it if its area is less than the fin's size."""
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -177,26 +176,24 @@ class HelicoilDepthCheck:
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
-
-            # Calculate 20% of the fin's bounding box area
+    
+            # Calculate the fin's bounding box area
             if self.fin_coordinates is not None:
                 fin_area = cv2.contourArea(np.int0(self.fin_coordinates))
-                min_area_threshold = 0.8 * fin_area
-                max_area_threshold = 1.2 * fin_area
             else:
-                min_area_threshold = float('inf')  # Prevent any drawing if no fin is detected
-                max_area_threshold = 0  # Prevent any drawing if no fin is detected
-
-            # Filter based on the adjusted size condition
-            if min_area_threshold <= new_box_area <= max_area_threshold:
+                fin_area = float('inf')  # Prevent any drawing if no fin is detected
+    
+            # Annotate if the detected surface area is less than the fin's area
+            if new_box_area <= fin_area:
                 self.previous_box = box
                 print("Top surface detected and annotated.")
             else:
-                print("Detected surface does not meet size constraints. Persisting previous yellow box.")
+                print("Detected surface is larger than the fin's size. Persisting previous yellow box.")
                 
             # Draw the previous box if it exists
             if self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
