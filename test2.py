@@ -168,8 +168,8 @@ class HelicoilDepthCheck:
 
         return np.array([])
 
-    def _detect_top_surface(self, frame: np.ndarray, driver_detected: bool):
-        """Detect the top surface of the fin and annotate it based on the presence of the driver and surface area."""
+    def _detect_top_surface(self, frame: np.ndarray, driver_detected: bool, hand_coords_list: list[list[int]]):
+        """Detect the top surface of the fin and annotate it based on the presence of the driver, surface area, and hand distance."""
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -193,8 +193,21 @@ class HelicoilDepthCheck:
                 min_area_threshold = float('-inf')  # Ensure no detection if no fin
                 max_area_threshold = float('inf')  # Ensure no detection if no fin
     
-            # Annotate if the detected surface area is within the required range
-            if not driver_detected and min_area_threshold <= new_box_area <= max_area_threshold:
+            # Check if any hand is too close to the fin
+            hand_far_from_fin = True
+            for hand_coords in hand_coords_list:
+                distances_to_fin = self._compute_distance_to_fin(hand_coords)
+                if len(distances_to_fin) > 0:
+                    min_hand_fin_distance = np.min(distances_to_fin)
+                    print(f"Minimum distance between hand and fin: {min_hand_fin_distance} pixels")
+
+                    if min_hand_fin_distance < 1000:
+                        hand_far_from_fin = False
+                        print("Hand is too close to the fin. Skipping yellow box annotation.")
+                        break
+    
+            # Annotate if the detected surface area is within the required range, the hand is far from the fin, and the driver is not detected
+            if not driver_detected and hand_far_from_fin and min_area_threshold <= new_box_area <= max_area_threshold:
                 if self.previous_box is None or new_box_area < cv2.contourArea(self.previous_box):
                     self.previous_box = box
                     print("New smaller top surface detected and annotated.")
@@ -206,12 +219,17 @@ class HelicoilDepthCheck:
             # Draw the previous box if it exists
             if self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-
+    
+        # If no contours found or conditions not met, the previous box persists
+        elif self.previous_box is not None:
+            print("No new valid detection; persisting previous yellow box.")
+            cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
         driver_detected = self._check_operator(frame, timestamp)
-        self._detect_top_surface(frame, driver_detected)
+        hand_coords_list = self._find_hands(frame)
+        self._detect_top_surface(frame, driver_detected, hand_coords_list)
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
