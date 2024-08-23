@@ -12,26 +12,23 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        min_surface_size: int = 100000,  # Minimum size for a valid top surface
-        hand_far_thresh: int = 500,  # Distance threshold to consider hand far from the fin
+        driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
         self.driver_model = self._load_model(driver_detector_model_path)
-        self.point_checks = np.array([False] * (interpolation_points * 4 + 4))
+        self.point_checks = np.array(
+            [False] * (interpolation_points * 4 + 4)
+        )
         self.fin_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
-        self.min_surface_size = min_surface_size
-        self.hand_far_thresh = hand_far_thresh
         self.distances = []
         self.driver_hand_distances = []
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
         self.previous_box = None  # Store the previous yellow box
-        self.hand_far_from_fin = True  # Flag to check if hand is far from fin
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -41,12 +38,25 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
+            fin_class = int(detections[0].obb.cls.numpy()[0])
+            print("fin_class**************", fin_class)
+            
+            # Assign color based on the fin class
+            if fin_class == 0:
+                color = (255, 0, 0)  # Blue
+            elif fin_class == 1:
+                color = (0, 255, 0)  # Green
+            elif fin_class == 2:
+                color = (0, 255, 255)  # Yellow
+            else:
+                color = (0, 0, 255)  # Red (default if unknown class)
+
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            # Draw the interpolated points as circles on the frame
+            # Draw the interpolated points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -62,7 +72,7 @@ class HelicoilDepthCheck:
             print(f"Driver detected at ({c_x}, {c_y}).")
             # Draw the driver on the frame
             for point in points:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=-1)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
             return [int(c_x), int(c_y)]
         print("No driver detected.")
         return []
@@ -155,7 +165,7 @@ class HelicoilDepthCheck:
         return np.array([])
 
     def _detect_top_surface(self, frame: np.ndarray):
-        """Detect the top surface of the fin and annotate it"""
+        """Detect the top surface of the fin and annotate it with an adjusted minimum and maximum size condition."""
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 200])
         upper_white = np.array([180, 30, 255])
@@ -168,50 +178,29 @@ class HelicoilDepthCheck:
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
 
-            # Filter based on size condition
-            if new_box_area >= self.min_surface_size:
-                if self.previous_box is None or (self.hand_far_from_fin and self._should_replace_box(box)):
-                    self.previous_box = box
-                    print("Updated the previous box based on hand distance and surface size.")
-                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+            # Calculate 20% of the fin's bounding box area
+            if self.fin_coordinates is not None:
+                fin_area = cv2.contourArea(np.int0(self.fin_coordinates))
+                min_area_threshold = 0.8 * fin_area
+                max_area_threshold = 1.2 * fin_area
+            else:
+                min_area_threshold = float('inf')  # Prevent any drawing if no fin is detected
+                max_area_threshold = 0  # Prevent any drawing if no fin is detected
+
+            # Filter based on the adjusted size condition
+            if min_area_threshold <= new_box_area <= max_area_threshold:
+                self.previous_box = box
                 print("Top surface detected and annotated.")
             else:
-                # Draw the previous box if the new one isn't valid
-                if self.previous_box is not None:
-                    cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-                    print("Persisting previous yellow box due to size constraint.")
-
-    def _should_replace_box(self, box: np.ndarray) -> bool:
-        """Determine if the previous box should be replaced with the new one based on orientation and size."""
-        if self.previous_box is None:
-            return True
-
-        prev_box_area = cv2.contourArea(self.previous_box)
-        new_box_orientation = cv2.minAreaRect(box)[2]
-        prev_box_orientation = cv2.minAreaRect(self.previous_box)[2]
-
-        # Replace the box if the new one is smaller or has a different orientation
-        return cv2.contourArea(box) < prev_box_area or not np.isclose(new_box_orientation, prev_box_orientation, atol=5)
+                print("Detected surface does not meet size constraints. Persisting previous yellow box.")
+                
+            # Draw the previous box if it exists
+            if self.previous_box is not None:
+                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
         self._check_operator(frame, timestamp)
-        hand_coords_list = self._find_hands(frame)
-
-        # Check if the hand is far from the fin
-        if hand_coords_list and self.fin_coordinates is not None:
-            for hand_coords in hand_coords_list:
-                distances_to_fin = self._compute_distance_to_fin(hand_coords)
-                if len(distances_to_fin) > 0:
-                    min_distance_to_fin = np.min(distances_to_fin)
-                    if min_distance_to_fin > self.hand_far_thresh:
-                        self.hand_far_from_fin = True
-                    else:
-                        self.hand_far_from_fin = False
-                        break
-        else:
-            self.hand_far_from_fin = True  # Assume hand is far if not detected
-
         self._detect_top_surface(frame)
 
     def final_decision(self) -> bool:
@@ -219,16 +208,16 @@ class HelicoilDepthCheck:
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
             print(f"Average number of fin points 'hit': {majority_hits}")
-
+    
             # Consider the driver's proximity to the hand in the decision
             driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
-
+    
             # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
-                print("Final Decision: Helicoil depth check passed.")
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
+                
                 return True
-
+            
         print("Final Decision: Helicoil depth check failed.")
         return False
 
@@ -236,13 +225,13 @@ class HelicoilDepthCheck:
         """Save the distances and driver-hand distances to a CSV file"""
         df = pd.DataFrame(self.distances)
         df_hand = pd.DataFrame(self.driver_hand_distances)
-
+        
         # Merge the distance and driver-hand distance DataFrames
         df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
-
+        
         # Rename columns for clarity
         df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
-
+        
         df_combined.to_csv(output_csv_path, index=False)
         print(f"Distances and driver-hand distances saved to {output_csv_path}")
 
@@ -260,7 +249,7 @@ if __name__ == "__main__":
     out = cv2.VideoWriter('output_with_visualization.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
 
     if not cap.isOpened():
-        raise Exception("Error opening video file")
+        raise ("Error opening video file")
 
     frame_count = 0
     fps = cap.get(cv2.CAP_PROP_FPS)  # Get the frames per second of the video
