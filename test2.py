@@ -206,7 +206,7 @@ class HelicoilDepthCheck:
             fin_area = fin_bounding_box[2] * fin_bounding_box[3]  # width * height
 
             # Check if the white rectangle is a significant portion of the fin area (at least 80%)
-            if white_rect_area >= 0.8 * fin_area and self._is_box_inside_fin(box):
+            if white_rect_area >= 0.7 * fin_area and self._is_box_inside_fin(box):
                 cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)  # Draw yellow rectangle
                 self.stored_yellow_box = box  # Store the yellow box
                 self.yellow_box_persist = True  # Set flag to persist the yellow box
