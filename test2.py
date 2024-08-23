@@ -37,24 +37,12 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = detections[0].obb.cls.numpy()[0]
-            
-            # Assign color based on the fin class
-            if fin_class == 0:
-                color = (255, 0, 0)  # Blue
-            elif fin_class == 1:
-                color = (0, 255, 0)  # Green
-            elif fin_class == 2:
-                color = (0, 255, 255)  # Cyan
-            else:
-                color = (0, 0, 255)  # Red (default if unknown class)
-
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            # Draw the interpolated points as circles on the frame with the assigned color
+            # Draw the interpolated points as circles on the frame
             for point in self.fin_coordinates:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=-1)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 255, 0), thickness=-1)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -178,6 +166,7 @@ class HelicoilDepthCheck:
     
             # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
+                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
