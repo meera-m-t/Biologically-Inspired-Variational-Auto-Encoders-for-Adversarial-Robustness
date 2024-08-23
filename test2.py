@@ -53,8 +53,8 @@ class HelicoilDepthCheck:
                     class_name = self.class_mapping.get(fin_class, "Unknown")
                     color = self._get_color_for_class(fin_class)  # Get color based on class
                     
-                    # Print the class name
-                    print(f"Detected fin class: {class_name}")
+                    # Print the class name with ***
+                    print(f"*** Detected fin class: {class_name} ***")
                     
                     # Get the four corners of the OBB
                     box_points = obb[i].reshape(-1, 2)
@@ -166,7 +166,6 @@ class HelicoilDepthCheck:
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
-                self.driver_hand_distances.append({"Time (seconds)": timestamp, "Driver-Hand Distance (pixels)": driver_hand_distance})
                 print(f"Distance between driver and hand: {driver_hand_distance} pixels")
 
                 # Check if the driver is within the threshold distance of the hand
@@ -177,12 +176,10 @@ class HelicoilDepthCheck:
             distances_to_fin = self._compute_distance_to_fin(driver_coords)
             if len(distances_to_fin) > 0:
                 min_distance = np.min(distances_to_fin)  # Store only the minimum distance
-                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
-                print(f"Minimum distance between driver and fin: {min_distance} pixels")
+                print(f"*** Minimum distance between driver and fin: {min_distance} pixels ***")
 
             # Determine how many points on the fin outline are within the threshold
             hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
-            self.fin_point_hits.append(hits)
             print(f"Number of fin points 'hit' by the driver: {hits}")
 
         self.total_frames_checked += 1
