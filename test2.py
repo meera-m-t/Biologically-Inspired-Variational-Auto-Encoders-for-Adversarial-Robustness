@@ -28,6 +28,8 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
+        self.stored_yellow_box = None
+        self.yellow_box_persist = False
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -37,9 +39,9 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.numpy()[0])
+            fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
             print("fin_class**************", fin_class)
-            
+
             # Assign color based on the fin class
             if fin_class == 0:
                 color = (255, 0, 0)  # Blue
@@ -53,43 +55,12 @@ class HelicoilDepthCheck:
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            
-            # Refine the fin detection to cover just the white surface
-            self.fin_coordinates = self._refine_fin_detection(frame, self.fin_coordinates)
-
-            # Draw the refined points as circles on the frame with the assigned color
+            # Draw the interpolated points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
-
-    def _refine_fin_detection(self, frame: np.ndarray, fin_coordinates: np.ndarray):
-        """Refine the detected fin area to just cover the white surface"""
-        # Convert the frame to grayscale
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Create a mask of the detected fin area
-        mask = np.zeros_like(gray_frame)
-        cv2.fillPoly(mask, [fin_coordinates.astype(np.int32)], 255)
-        
-        # Apply the mask to the grayscale image
-        masked_gray = cv2.bitwise_and(gray_frame, mask)
-        
-        # Apply thresholding to isolate the white surface
-        _, thresh = cv2.threshold(masked_gray, 200, 255, cv2.THRESH_BINARY)
-        
-        # Find contours of the thresholded white region
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Find the largest contour, assuming it is the white surface
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        # Draw the new bounding box around the largest contour
-        x, y, w, h = cv2.boundingRect(largest_contour)
-        
-        # Return the refined coordinates
-        return np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]])
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
@@ -157,6 +128,19 @@ class HelicoilDepthCheck:
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
+        if not driver_coords and not hand_coords_list:
+            # Detect the top surface if no driver and hand are detected
+            self._detect_top_surface(frame)
+
+        if driver_coords and hand_coords_list:
+            # Reset yellow box persistence when hand and driver are detected
+            self.yellow_box_persist = False
+            self.stored_yellow_box = None
+
+        # Persist the yellow box if conditions are met
+        if self.yellow_box_persist and self.stored_yellow_box is not None:
+            cv2.drawContours(frame, [self.stored_yellow_box], 0, (0, 255, 255), 2)  # Draw stored yellow rectangle
+
         if driver_coords and hand_coords_list:
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
@@ -193,6 +177,44 @@ class HelicoilDepthCheck:
             return distances
 
         return np.array([])
+
+    def _detect_top_surface(self, frame: np.ndarray):
+        """Detect the top surface of the fin and annotate it, but only if the fin is detected and neither the hand nor the driver is detected."""
+        if self.fin_coordinates is None or len(self.fin_coordinates) == 0:
+            print("Fin not detected or coordinates are empty, skipping top surface detection.")
+            return
+
+        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_white = np.array([0, 0, 200])
+        upper_white = np.array([180, 30, 255])
+        mask = cv2.inRange(hsv_frame, lower_white, upper_white)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            rect = cv2.minAreaRect(largest_contour)
+            box = cv2.boxPoints(rect)
+            box = np.int0(box)
+
+            # Ensure the yellow rectangle is inside the fin detection area
+            if self._is_box_inside_fin(box):
+                cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)  # Draw yellow rectangle
+                self.stored_yellow_box = box  # Store the yellow box
+                self.yellow_box_persist = True  # Set flag to persist the yellow box
+            else:
+                print("Detected top surface is not inside the fin area.")
+        else:
+            print("No top surface detected.")
+
+    def _is_box_inside_fin(self, box: np.ndarray) -> bool:
+        """Check if the yellow box is inside the fin detection area."""
+        if self.fin_coordinates is None:
+            return False
+
+        for point in box:
+            if cv2.pointPolygonTest(self.fin_coordinates, tuple(point), False) < 0:
+                return False
+        return True
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
