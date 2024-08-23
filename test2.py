@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd
 from ultralytics import YOLO
 
 
@@ -12,7 +13,6 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
-        class_mapping: dict = None  # Mapping from class index to class name
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -28,61 +28,36 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.class_mapping = class_mapping if class_mapping is not None else {0: "Large", 1: "Medium", 2: "Small"}
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
         return YOLO(model_path)
 
     def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
-        """Find the fins' borders and classify them"""
-        results = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        
-        if results and len(results) > 0:
-            result = results[0]
+        """Find the fins' borders"""
+        detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
+        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
+            fin_class = detections[0].obb.cls.numpy()[0]
             
-            if result.boxes is not None and len(result.boxes) > 0:
-                # Get the oriented bounding boxes in xyxyxyxy format (coordinates of the four corners)
-                obb = result.boxes.xyxyxyxy.cpu().numpy()
-                
-                # Get the class labels
-                classes = result.boxes.cls.cpu().numpy()  # Class indices
-                
-                for i in range(len(obb)):
-                    fin_class = int(classes[i])  # Predicted class for the fin
-                    class_name = self.class_mapping.get(fin_class, "Unknown")
-                    color = self._get_color_for_class(fin_class)  # Get color based on class
-                    
-                    # Print the class name with ***
-                    print(f"*** Detected fin class: {class_name} ***")
-                    
-                    # Get the four corners of the OBB
-                    box_points = obb[i].reshape(-1, 2)
-                    self.fin_coordinates = self._interpolate_polygon_points(box_points)
-
-                    # Draw the OBB and the classification on the frame
-                    for point in self.fin_coordinates:
-                        cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=-1)
-                    
-                    # Optionally, display the class label on the frame
-                    label = f"{class_name}"
-                    cv2.putText(frame, label, (int(box_points[0][0]), int(box_points[0][1]) - 10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            # Assign color based on the fin class
+            if fin_class == 0:
+                color = (255, 0, 0)  # Blue
+            elif fin_class == 1:
+                color = (0, 255, 0)  # Green
+            elif fin_class == 2:
+                color = (0, 255, 255)  # Cyan
             else:
-                self.fin_coordinates = None
-                print("No fins detected.")
+                color = (0, 0, 255)  # Red (default if unknown class)
+
+            self.fin_coordinates = self._interpolate_polygon_points(
+                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+            )
+            # Draw the interpolated points as circles on the frame with the assigned color
+            for point in self.fin_coordinates:
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=-1)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
-
-    def _get_color_for_class(self, fin_class: int) -> tuple:
-        """Return color based on the fin class"""
-        if fin_class == 0:  # Large
-            return (0, 0, 255)  # Red
-        elif fin_class == 1:  # Medium
-            return (0, 255, 255)  # Yellow
-        else:  # Small
-            return (0, 255, 0)  # Green
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
@@ -144,6 +119,37 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
+    def _check_operator(self, frame: np.ndarray, timestamp: float):
+        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
+        self._find_fin(frame)
+        driver_coords = self._find_driver(frame)
+        hand_coords_list = self._find_hands(frame)
+
+        if driver_coords and hand_coords_list:
+            for hand_coords in hand_coords_list:
+                # Compute distance between driver and hand
+                driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
+                self.driver_hand_distances.append({"Time (seconds)": timestamp, "Driver-Hand Distance (pixels)": driver_hand_distance})
+                print(f"Distance between driver and hand: {driver_hand_distance} pixels")
+
+                # Check if the driver is within the threshold distance of the hand
+                if driver_hand_distance <= self.driver_hand_thresh:
+                    self.frames_with_driver_hand_within_thresh += 1
+
+            # Compute distances between driver and each fin point
+            distances_to_fin = self._compute_distance_to_fin(driver_coords)
+            if len(distances_to_fin) > 0:
+                min_distance = np.min(distances_to_fin)  # Store only the minimum distance
+                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
+                print(f"Minimum distance between driver and fin: {min_distance} pixels")
+
+            # Determine how many points on the fin outline are within the threshold
+            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
+            self.fin_point_hits.append(hits)
+            print(f"Number of fin points 'hit' by the driver: {hits}")
+
+        self.total_frames_checked += 1
+
     def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
         """Compute distances between the driver and each point on the fin outline"""
         if driver_coords and self.fin_coordinates is not None:
@@ -155,34 +161,6 @@ class HelicoilDepthCheck:
             return distances
 
         return np.array([])
-
-    def _check_operator(self, frame: np.ndarray, timestamp: float):
-        """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
-        self._find_fin(frame)
-        driver_coords = self._find_driver(frame)
-        hand_coords_list = self._find_hands(frame)
-
-        if driver_coords and hand_coords_list:
-            for hand_coords in hand_coords_list:
-                # Compute distance between driver and hand
-                driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
-                print(f"Distance between driver and hand: {driver_hand_distance} pixels")
-
-                # Check if the driver is within the threshold distance of the hand
-                if driver_hand_distance <= self.driver_hand_thresh:
-                    self.frames_with_driver_hand_within_thresh += 1
-
-            # Compute distances between driver and each fin point
-            distances_to_fin = self._compute_distance_to_fin(driver_coords)
-            if len(distances_to_fin) > 0:
-                min_distance = np.min(distances_to_fin)  # Store only the minimum distance
-                print(f"*** Minimum distance between driver and fin: {min_distance} pixels ***")
-
-            # Determine how many points on the fin outline are within the threshold
-            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
-            print(f"Number of fin points 'hit' by the driver: {hits}")
-
-        self.total_frames_checked += 1
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
@@ -200,24 +178,29 @@ class HelicoilDepthCheck:
     
             # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
-                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
         return False
 
+    def save_distances_to_csv(self, output_csv_path: str):
+        """Save the distances and driver-hand distances to a CSV file"""
+        df = pd.DataFrame(self.distances)
+        df_hand = pd.DataFrame(self.driver_hand_distances)
+        
+        # Merge the distance and driver-hand distance DataFrames
+        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
+        
+        # Rename columns for clarity
+        df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
+        
+        df_combined.to_csv(output_csv_path, index=False)
+        print(f"Distances and driver-hand distances saved to {output_csv_path}")
+
 
 if __name__ == "__main__":
-    # Example class mapping
-    class_mapping = {0: "Large", 1: "Medium", 2: "Small"}
-
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck(
-        "models/fin_detector.pt", 
-        "models/hand_detector.pt", 
-        "models/driver.pt",
-        class_mapping=class_mapping
-    )
+    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
 
     # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
@@ -254,6 +237,9 @@ if __name__ == "__main__":
         print("Final Decision: Helicoil depth check passed.")
     else:
         print("Final Decision: Helicoil depth check failed.")
+
+    # Save the distances to a CSV file
+    helicoil_depth_check.save_distances_to_csv("distances.csv")
 
     cap.release()
     out.release()
