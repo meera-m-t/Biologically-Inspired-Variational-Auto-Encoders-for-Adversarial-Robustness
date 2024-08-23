@@ -12,7 +12,7 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
+        driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -47,7 +47,7 @@ class HelicoilDepthCheck:
             elif fin_class == 1:
                 color = (0, 255, 0)  # Green
             elif fin_class == 2:
-                color = (0, 255, 255)  # Cyan
+                color = (0, 255, 255)  # Yellow
             else:
                 color = (0, 0, 255)  # Red (default if unknown class)
 
@@ -179,7 +179,7 @@ class HelicoilDepthCheck:
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
     
             # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
                 
                 return True
             
