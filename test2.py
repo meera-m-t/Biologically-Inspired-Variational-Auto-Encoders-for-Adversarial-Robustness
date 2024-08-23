@@ -28,8 +28,8 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.stored_yellow_box = None
-        self.yellow_box_persist = False
+        self.stored_yellow_box = None  # To store the yellow rectangle
+        self.yellow_box_persist = False  # Flag to persist the yellow rectangle
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -39,7 +39,7 @@ class HelicoilDepthCheck:
         """Find the fins' borders"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
+            fin_class = int(detections[0].obb.cls.numpy()[0])
             print("fin_class**************", fin_class)
 
             # Assign color based on the fin class
@@ -58,6 +58,10 @@ class HelicoilDepthCheck:
             # Draw the interpolated points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
+
+            # Only detect top surface and draw yellow box if no driver or hand is detected
+            if not self.yellow_box_persist:
+                self._detect_top_surface(frame)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -129,15 +133,13 @@ class HelicoilDepthCheck:
         hand_coords_list = self._find_hands(frame)
 
         if not driver_coords and not hand_coords_list:
-            # Detect the top surface if no driver and hand are detected
-            self._detect_top_surface(frame)
-
-        if driver_coords and hand_coords_list:
+            # If no driver and hands detected, persist the yellow box
+            self.yellow_box_persist = True
+        else:
             # Reset yellow box persistence when hand and driver are detected
             self.yellow_box_persist = False
             self.stored_yellow_box = None
 
-        # Persist the yellow box if conditions are met
         if self.yellow_box_persist and self.stored_yellow_box is not None:
             cv2.drawContours(frame, [self.stored_yellow_box], 0, (0, 255, 255), 2)  # Draw stored yellow rectangle
 
@@ -196,13 +198,20 @@ class HelicoilDepthCheck:
             box = cv2.boxPoints(rect)
             box = np.int0(box)
 
-            # Ensure the yellow rectangle is inside the fin detection area
-            if self._is_box_inside_fin(box):
+            # Calculate the area of the detected white rectangle
+            white_rect_area = cv2.contourArea(box)
+
+            # Calculate the area of the fin's bounding box
+            fin_bounding_box = cv2.boundingRect(np.array(self.fin_coordinates))
+            fin_area = fin_bounding_box[2] * fin_bounding_box[3]  # width * height
+
+            # Check if the white rectangle is a significant portion of the fin area (at least 80%)
+            if white_rect_area >= 0.8 * fin_area and self._is_box_inside_fin(box):
                 cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)  # Draw yellow rectangle
                 self.stored_yellow_box = box  # Store the yellow box
                 self.yellow_box_persist = True  # Set flag to persist the yellow box
             else:
-                print("Detected top surface is not inside the fin area.")
+                print("Detected top surface is either too small or not inside the fin area.")
         else:
             print("No top surface detected.")
 
@@ -220,7 +229,7 @@ class HelicoilDepthCheck:
         """Analyze each frame where the driver is detected."""
         self._check_operator(frame, timestamp)
 
-    def final_decision(self) -> bool:
+    def final_decision(self() -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
