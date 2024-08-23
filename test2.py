@@ -38,8 +38,7 @@ class HelicoilDepthCheck:
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
             fin_class = int(detections[0].obb.cls.numpy()[0])
-            print("fin_class**************",fin_class)
-            
+            print("fin_class**************", fin_class)
             
             # Assign color based on the fin class
             if fin_class == 0:
@@ -54,12 +53,43 @@ class HelicoilDepthCheck:
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
-            # Draw the interpolated points as circles on the frame with the assigned color
+            
+            # Refine the fin detection to cover just the white surface
+            self.fin_coordinates = self._refine_fin_detection(frame, self.fin_coordinates)
+
+            # Draw the refined points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
+
+    def _refine_fin_detection(self, frame: np.ndarray, fin_coordinates: np.ndarray):
+        """Refine the detected fin area to just cover the white surface"""
+        # Convert the frame to grayscale
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Create a mask of the detected fin area
+        mask = np.zeros_like(gray_frame)
+        cv2.fillPoly(mask, [fin_coordinates.astype(np.int32)], 255)
+        
+        # Apply the mask to the grayscale image
+        masked_gray = cv2.bitwise_and(gray_frame, mask)
+        
+        # Apply thresholding to isolate the white surface
+        _, thresh = cv2.threshold(masked_gray, 200, 255, cv2.THRESH_BINARY)
+        
+        # Find contours of the thresholded white region
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Find the largest contour, assuming it is the white surface
+        largest_contour = max(contours, key=cv2.contourArea)
+        
+        # Draw the new bounding box around the largest contour
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        
+        # Return the refined coordinates
+        return np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]])
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
