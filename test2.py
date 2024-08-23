@@ -175,13 +175,14 @@ class HelicoilDepthCheck:
         upper_white = np.array([180, 30, 255])
         mask = cv2.inRange(hsv_frame, lower_white, upper_white)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
             rect = cv2.minAreaRect(largest_contour)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
             new_box_area = cv2.contourArea(box)
-
+    
             # Calculate the fin's bounding box area
             if self.fin_coordinates is not None:
                 fin_area = cv2.contourArea(np.int0(self.fin_coordinates))
@@ -191,17 +192,21 @@ class HelicoilDepthCheck:
                 fin_area = float('inf')  # Prevent any drawing if no fin is detected
                 min_area_threshold = float('-inf')  # Ensure no detection if no fin
                 max_area_threshold = float('inf')  # Ensure no detection if no fin
-
+    
             # Annotate if the detected surface area is within the required range
             if not driver_detected and min_area_threshold <= new_box_area <= max_area_threshold:
-                self.previous_box = box
-                print("Top surface detected and annotated.")
+                if self.previous_box is None or new_box_area < cv2.contourArea(self.previous_box):
+                    self.previous_box = box
+                    print("New smaller top surface detected and annotated.")
+                else:
+                    print("New box detected but larger, retaining previous yellow box.")
             else:
                 print("Condition not met, persisting previous yellow box.")
-                
+    
             # Draw the previous box if it exists
             if self.previous_box is not None:
                 cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
