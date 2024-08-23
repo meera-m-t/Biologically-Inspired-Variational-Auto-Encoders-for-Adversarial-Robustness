@@ -12,7 +12,7 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 700,  # Threshold for driver-hand proximity
+        driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -56,7 +56,7 @@ class HelicoilDepthCheck:
             )
             # Draw the interpolated points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=-1)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
@@ -72,7 +72,7 @@ class HelicoilDepthCheck:
             print(f"Driver detected at ({c_x}, {c_y}).")
             # Draw the driver on the frame
             for point in points:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=-1)
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
             return [int(c_x), int(c_y)]
         print("No driver detected.")
         return []
