@@ -34,36 +34,46 @@ class HelicoilDepthCheck:
         return YOLO(model_path)
 
     def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
-        """Find the fins' borders"""
+        """Find the fin using the provided class index"""
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
-            print("fin_class**************",fin_class)
+            fin_class = int(detections[0].obb.cls.cpu().numpy()[1])  # Using index [1]
+            print("fin_class**************", fin_class)
             
+            # Differentiate between the 3 possibilities for the fin
             self.fin_coordinates = self._interpolate_polygon_points(
-                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+                detections[0].obb.xyxyxyxy.cpu().numpy()[1]  # Using index [1] for fin
             )
             
-            # Draw solid polygon if class is 3 (surface)
-            if fin_class == 3:
-                cv2.fillPoly(frame, [self.fin_coordinates.astype(np.int32)], color=(0, 0, 255))  # Red
+            # Assign color based on the fin class
+            if fin_class == 0:
+                color = (255, 0, 0)  # Blue
+            elif fin_class == 1:
+                color = (0, 255, 0)  # Green
+            elif fin_class == 2:
+                color = (0, 255, 255)  # Yellow
             else:
-                # Assign color based on the fin class
-                if fin_class == 0:
-                    color = (255, 0, 0)  # Blue
-                elif fin_class == 1:
-                    color = (0, 255, 0)  # Green
-                elif fin_class == 2:
-                    color = (0, 255, 255)  # Yellow
-                else:
-                    color = (0, 0, 255)  # Red (default if unknown class)
+                color = (0, 0, 255)  # Red (default if unknown class)
 
-                # Draw the interpolated points as circles on the frame with the assigned color
-                for point in self.fin_coordinates:
-                    cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
+            # Draw the interpolated points as circles on the frame with the assigned color
+            for point in self.fin_coordinates:
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
+
+    def _draw_surface(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
+        """Draw the surface using the provided class index"""
+        detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
+        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
+            # Using index [0] for surface
+            surface_coordinates = self._interpolate_polygon_points(
+                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+            )
+            # Draw solid polygon for surface class
+            cv2.fillPoly(frame, [surface_coordinates.astype(np.int32)], color=(0, 0, 255))  # Red
+        else:
+            print("No surface detected.")
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
@@ -128,6 +138,7 @@ class HelicoilDepthCheck:
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
+        self._draw_surface(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
@@ -184,7 +195,6 @@ class HelicoilDepthCheck:
     
             # Adjusting the thresholds for acceptance
             if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
-                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
