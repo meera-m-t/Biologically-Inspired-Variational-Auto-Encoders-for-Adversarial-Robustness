@@ -181,7 +181,7 @@ class HelicoilDepthCheck:
         """Analyze each frame where the driver is detected."""
         driver_detected = self._check_operator(frame, timestamp)
         hand_coords_list = self._find_hands(frame)
-        # Call the _detect_top_surface function to handle detection logic
+        # Handle surface detection if needed
         self._detect_top_surface(frame, driver_detected, hand_coords_list)
 
     def _detect_top_surface(self, frame: np.ndarray, driver_detected: bool, hand_coords_list: list[list[int]]):
@@ -224,22 +224,12 @@ class HelicoilDepthCheck:
     
             # Annotate if the detected surface area is within the required range, the hand is far from the fin, and the driver is not detected
             if not driver_detected and hand_far_from_fin and min_area_threshold <= new_box_area <= max_area_threshold:
-                if self.previous_box is None or new_box_area < cv2.contourArea(self.previous_box):
-                    self.previous_box = box
-                    print("New smaller top surface detected and annotated.")
-                else:
-                    print("New box detected but larger, retaining previous yellow box.")
+                print("New smaller top surface detected and annotated.")
             else:
                 print("Condition not met, persisting previous yellow box.")
-    
-            # Draw the previous box if it exists
-            if self.previous_box is not None:
-                cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
-    
-        # If no contours found or conditions not met, the previous box persists
-        elif self.previous_box is not None:
-            print("No new valid detection; persisting previous yellow box.")
-            cv2.drawContours(frame, [self.previous_box], 0, (0, 255, 255), 2)
+
+            # Draw the current detected surface if conditions are met
+            cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
@@ -275,7 +265,7 @@ class HelicoilDepthCheck:
 
 if __name__ == "__main__":
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector1.pt", "models/hand_detector.pt", "models/driver.pt")
+    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
 
     # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
