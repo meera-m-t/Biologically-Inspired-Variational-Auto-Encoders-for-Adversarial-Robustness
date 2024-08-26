@@ -265,7 +265,7 @@ class HelicoilDepthCheck:
 
 if __name__ == "__main__":
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
+    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector1.pt", "models/hand_detector.pt", "models/driver.pt")
 
     # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
