@@ -21,6 +21,7 @@ class HelicoilDepthCheck:
             [False] * (interpolation_points * 4 + 4)
         )
         self.fin_coordinates = None
+        self.previous_polygon = None  # Store the previous polygon
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
         self.distances = []
@@ -68,7 +69,11 @@ class HelicoilDepthCheck:
     def _draw_solid_polygon(self, frame: np.ndarray):
         """Draw a solid polygon for the surface (class 3)"""
         if self.fin_coordinates is not None:
-            cv2.fillPoly(frame, [np.int32(self.fin_coordinates)], color=(0, 255, 255))  # Solid yellow polygon
+            self.previous_polygon = np.int32(self.fin_coordinates)  # Store the current polygon
+            cv2.fillPoly(frame, [self.previous_polygon], color=(0, 255, 255))  # Solid yellow polygon
+        elif self.previous_polygon is not None:
+            # If no new polygon is detected, use the previous one
+            cv2.fillPoly(frame, [self.previous_polygon], color=(0, 255, 255))  # Solid yellow polygon
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
