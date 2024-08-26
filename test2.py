@@ -38,37 +38,32 @@ class HelicoilDepthCheck:
         detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
             fin_class = int(detections[0].obb.cls.cpu().numpy()[0])
-            print("fin_class**************", fin_class)
+            print("fin_class**************",fin_class)
             
-            # Assign color based on the fin class
-            if fin_class == 0:
-                color = (255, 0, 0)  # Blue
-            elif fin_class == 1:
-                color = (0, 255, 0)  # Green
-            elif fin_class == 2:
-                color = (0, 255, 255)  # Yellow
-            else:
-                color = (0, 0, 255)  # Red for class 3 (surface)
-
             self.fin_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[0]
             )
             
-            # Draw the solid polygon if class 3 (surface) is detected
+            # Draw solid polygon if class is 3 (surface)
             if fin_class == 3:
-                self._draw_solid_polygon(frame)
+                cv2.fillPoly(frame, [self.fin_coordinates.astype(np.int32)], color=(0, 0, 255))  # Red
             else:
+                # Assign color based on the fin class
+                if fin_class == 0:
+                    color = (255, 0, 0)  # Blue
+                elif fin_class == 1:
+                    color = (0, 255, 0)  # Green
+                elif fin_class == 2:
+                    color = (0, 255, 255)  # Yellow
+                else:
+                    color = (0, 0, 255)  # Red (default if unknown class)
+
                 # Draw the interpolated points as circles on the frame with the assigned color
                 for point in self.fin_coordinates:
                     cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             self.fin_coordinates = None
             print("No fins detected.")
-
-    def _draw_solid_polygon(self, frame: np.ndarray):
-        """Draw a solid polygon for the surface (class 3)"""
-        if self.fin_coordinates is not None:
-            cv2.fillPoly(frame, [np.int32(self.fin_coordinates)], color=(0, 255, 255))  # Solid yellow polygon
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
@@ -130,16 +125,13 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
-    def _check_operator(self, frame: np.ndarray, timestamp: float) -> bool:
+    def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         self._find_fin(frame)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
-        driver_detected = False
-
         if driver_coords and hand_coords_list:
-            driver_detected = True
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
@@ -163,7 +155,6 @@ class HelicoilDepthCheck:
             print(f"Number of fin points 'hit' by the driver: {hits}")
 
         self.total_frames_checked += 1
-        return driver_detected
 
     def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
         """Compute distances between the driver and each point on the fin outline"""
@@ -179,57 +170,7 @@ class HelicoilDepthCheck:
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
-        driver_detected = self._check_operator(frame, timestamp)
-        hand_coords_list = self._find_hands(frame)
-        # Handle surface detection if needed
-        self._detect_top_surface(frame, driver_detected, hand_coords_list)
-
-    def _detect_top_surface(self, frame: np.ndarray, driver_detected: bool, hand_coords_list: list[list[int]]):
-        """Detect the top surface of the fin and annotate it based on the presence of the driver, surface area, and hand distance."""
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 30, 255])
-        mask = cv2.inRange(hsv_frame, lower_white, upper_white)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            rect = cv2.minAreaRect(largest_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-            new_box_area = cv2.contourArea(box)
-    
-            # Calculate the fin's bounding box area
-            if self.fin_coordinates is not None:
-                fin_area = cv2.contourArea(np.int0(self.fin_coordinates))
-                min_area_threshold = 0.5 * fin_area
-                max_area_threshold = 0.95 * fin_area
-            else:
-                fin_area = float('inf')  # Prevent any drawing if no fin is detected
-                min_area_threshold = float('-inf')  # Ensure no detection if no fin
-                max_area_threshold = float('inf')  # Ensure no detection if no fin
-    
-            # Check if any hand is too close to the fin
-            hand_far_from_fin = True
-            for hand_coords in hand_coords_list:
-                distances_to_fin = self._compute_distance_to_fin(hand_coords)
-                if len(distances_to_fin) > 0:
-                    min_hand_fin_distance = np.min(distances_to_fin)
-                    print(f"Minimum distance between hand and fin: {min_hand_fin_distance} pixels")
-
-                    if min_hand_fin_distance < 10000000:
-                        hand_far_from_fin = False
-                        print("Hand is too close to the fin. Skipping yellow box annotation.")
-                        break
-    
-            # Annotate if the detected surface area is within the required range, the hand is far from the fin, and the driver is not detected
-            if not driver_detected and hand_far_from_fin and min_area_threshold <= new_box_area <= max_area_threshold:
-                print("New smaller top surface detected and annotated.")
-            else:
-                print("Condition not met, persisting previous yellow box.")
-
-            # Draw the current detected surface if conditions are met
-            cv2.drawContours(frame, [box], 0, (0, 255, 255), 2)
+        self._check_operator(frame, timestamp)
 
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
@@ -242,7 +183,8 @@ class HelicoilDepthCheck:
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
     
             # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.74 and driver_hand_ratio >= 0.12:
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
+                
                 return True
             
         print("Final Decision: Helicoil depth check failed.")
