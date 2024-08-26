@@ -273,7 +273,7 @@ if __name__ == "__main__":
 
     # Set up video writer to save output in MKV format
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter('output_with_visualization.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
+    out = cv2.VideoWriter('output.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
 
     if not cap.isOpened():
         raise ("Error opening video file")
