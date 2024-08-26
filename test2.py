@@ -21,6 +21,7 @@ class HelicoilDepthCheck:
             [False] * (interpolation_points * 4 + 4)
         )
         self.fin_coordinates = None
+        self.surface_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
         self.distances = []
@@ -33,25 +34,38 @@ class HelicoilDepthCheck:
         """Load model"""
         return YOLO(model_path)
 
-    def _find_fin(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
+    def _process_detections(self, detections):
+        """Process detections to separate fin and surface"""
+        fin_index = None
+        surface_index = None
+        
+        classes = detections[0].obb.cls.cpu().numpy()
+        for i, cls in enumerate(classes):
+            if cls == 3:  # Surface
+                surface_index = i
+            elif cls in [0, 1, 2]:  # Fin (large, medium, small)
+                fin_index = i
+        
+        return fin_index, surface_index
+
+    def _find_fin(self, frame: np.ndarray, detections, fin_index: int):
         """Find the fin using the provided class index"""
-        detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            fin_class = int(detections[0].obb.cls.cpu().numpy()[1])  # Using index [1]
+        if fin_index is not None:
+            fin_class = int(detections[0].obb.cls.cpu().numpy()[fin_index])  # Get fin class
             print("fin_class**************", fin_class)
             
             # Differentiate between the 3 possibilities for the fin
             self.fin_coordinates = self._interpolate_polygon_points(
-                detections[0].obb.xyxyxyxy.cpu().numpy()[1]  # Using index [1] for fin
+                detections[0].obb.xyxyxyxy.cpu().numpy()[fin_index]  # Using fin_index
             )
             
             # Assign color based on the fin class
             if fin_class == 0:
-                color = (255, 0, 0)  # Blue
+                color = (255, 0, 0)  # Blue (Large Fin)
             elif fin_class == 1:
-                color = (0, 255, 0)  # Green
+                color = (0, 255, 0)  # Green (Medium Fin)
             elif fin_class == 2:
-                color = (0, 255, 255)  # Yellow
+                color = (0, 255, 255)  # Yellow (Small Fin)
             else:
                 color = (0, 0, 255)  # Red (default if unknown class)
 
@@ -59,19 +73,17 @@ class HelicoilDepthCheck:
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
-            self.fin_coordinates = None
-            print("No fins detected.")
+            print("No fin detected.")
 
-    def _draw_surface(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25):
+    def _draw_surface(self, frame: np.ndarray, detections, surface_index: int):
         """Draw the surface using the provided class index"""
-        detections = self.fins_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
-            # Using index [0] for surface
-            surface_coordinates = self._interpolate_polygon_points(
-                detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+        if surface_index is not None:
+            # Using surface_index for surface
+            self.surface_coordinates = self._interpolate_polygon_points(
+                detections[0].obb.xyxyxyxy.cpu().numpy()[surface_index]
             )
             # Draw solid polygon for surface class
-            cv2.fillPoly(frame, [surface_coordinates.astype(np.int32)], color=(0, 0, 255))  # Red
+            cv2.fillPoly(frame, [self.surface_coordinates.astype(np.int32)], color=(0, 0, 255))  # Red
         else:
             print("No surface detected.")
 
@@ -137,8 +149,10 @@ class HelicoilDepthCheck:
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
-        self._find_fin(frame)
-        self._draw_surface(frame)
+        detections = self.fins_model(frame, verbose=False)
+        fin_index, surface_index = self._process_detections(detections)
+        self._find_fin(frame, detections, fin_index)
+        self._draw_surface(frame, detections, surface_index)
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
