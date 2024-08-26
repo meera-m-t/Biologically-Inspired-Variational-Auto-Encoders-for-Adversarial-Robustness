@@ -12,7 +12,7 @@ class HelicoilDepthCheck:
         driver_detector_model_path: str,
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 800,  # Threshold for driver-hand proximity
+        driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -268,7 +268,7 @@ class HelicoilDepthCheck:
             print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
     
             # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.9 and driver_hand_ratio >= 0.27:
+            if majority_hits >= 0.9 and driver_hand_ratio >= 0.11:
                 
                 return True
             
@@ -292,7 +292,7 @@ class HelicoilDepthCheck:
 
 if __name__ == "__main__":
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector.pt", "models/driver.pt")
+    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector.pt", "models/hand_detector1.pt", "models/driver.pt")
 
     # This is just simulating grabbing frames from live stream
     example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
