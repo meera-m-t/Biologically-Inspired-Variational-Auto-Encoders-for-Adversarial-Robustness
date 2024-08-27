@@ -30,6 +30,7 @@ class HelicoilDepthCheck:
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
         self.previous_surface_coordinates = None  # Store the previous surface coordinates
+        self.previous_surface_area = None  # Store the area of the previous surface detection
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -76,16 +77,25 @@ class HelicoilDepthCheck:
         else:
             print("No fin detected.")
 
+    def _calculate_area(self, coordinates: np.ndarray) -> float:
+        """Calculate the area of the polygon formed by the given coordinates"""
+        if coordinates is not None and len(coordinates) > 0:
+            return cv2.contourArea(coordinates.astype(np.float32))
+        return 0.0
+
     def _draw_surface(self, frame: np.ndarray, detections, surface_index: int):
         """Draw the surface outline using the provided class index"""
         if surface_index is not None:
             # Using surface_index for surface
-            self.surface_coordinates = self._interpolate_polygon_points(
+            new_surface_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[surface_index]
             )
-            # Store the first detected surface coordinates to keep them persistent
-            if self.previous_surface_coordinates is None:
-                self.previous_surface_coordinates = self.surface_coordinates
+            new_surface_area = self._calculate_area(new_surface_coordinates)
+
+            # If no previous surface, or the new surface area is larger, update the stored surface
+            if self.previous_surface_coordinates is None or new_surface_area > self.previous_surface_area:
+                self.previous_surface_coordinates = new_surface_coordinates
+                self.previous_surface_area = new_surface_area
         else:
             print("No surface detected.")
         
