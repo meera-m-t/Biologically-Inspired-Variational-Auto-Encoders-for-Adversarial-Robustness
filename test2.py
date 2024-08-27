@@ -92,10 +92,23 @@ class HelicoilDepthCheck:
             )
             new_surface_area = self._calculate_area(new_surface_coordinates)
 
-            # If no previous surface, or the new surface area is larger, update the stored surface
-            if self.previous_surface_coordinates is None or new_surface_area > self.previous_surface_area:
+            if self.previous_surface_coordinates is None:
+                # No previous surface detected, so store the first one
                 self.previous_surface_coordinates = new_surface_coordinates
                 self.previous_surface_area = new_surface_area
+            else:
+                # Check the conditions for updating the surface
+                if new_surface_area < self.previous_surface_area:
+                    # Update if the new surface area is smaller
+                    self.previous_surface_coordinates = new_surface_coordinates
+                    self.previous_surface_area = new_surface_area
+                elif new_surface_area <= 1.02 * self.previous_surface_area:
+                    # Update if the new surface area is larger but not more than 2% larger
+                    self.previous_surface_coordinates = new_surface_coordinates
+                    self.previous_surface_area = new_surface_area
+                else:
+                    print("New surface detection is more than 2% larger than the previous one. Keeping the previous detection.")
+
         else:
             print("No surface detected.")
         
@@ -163,6 +176,18 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
+    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
+        """Compute distances between the driver and each point on the fin outline"""
+        if driver_coords and self.fin_coordinates is not None:
+            distances = np.sqrt(
+                np.sum(
+                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
+                )
+            )
+            return distances
+
+        return np.array([])
+
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         detections = self.fins_model(frame, verbose=False)
@@ -196,18 +221,6 @@ class HelicoilDepthCheck:
             print(f"Number of fin points 'hit' by the driver: {hits}")
 
         self.total_frames_checked += 1
-
-    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
-        """Compute distances between the driver and each point on the fin outline"""
-        if driver_coords and self.fin_coordinates is not None:
-            distances = np.sqrt(
-                np.sum(
-                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
-                )
-            )
-            return distances
-
-        return np.array([])
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
