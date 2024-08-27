@@ -250,7 +250,7 @@ if __name__ == "__main__":
     helicoil_depth_check = HelicoilDepthCheck("models/fin_detector1.pt", "models/hand_detector.pt", "models/driver.pt")
 
     # This is just simulating grabbing frames from live stream
-    example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
+    example_video_path = "data/large/correct/066a8c18-7c7b-7951-8000-215fda47e19e-clip.mkv"
     cap = cv2.VideoCapture(example_video_path)
 
     # Set up video writer to save output in MKV format
