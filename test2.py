@@ -90,7 +90,7 @@ class HelicoilDepthCheck:
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25, fin_index: int = 0) -> list[int]:
         """Find the driver using OBB"""
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > fin_index:
+        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 1:
             obb = detections[0].obb.xyxyxyxy.cpu().numpy()[fin_index]
             points = self._extract_obb_points(obb)
             c_x = np.mean(points[:, 0])
@@ -186,7 +186,7 @@ class HelicoilDepthCheck:
         """Analyze each frame where the driver is detected."""
         self._check_operator(frame, timestamp)
 
-    def final_decision(self() -> bool):
+    def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
         if len(self.fin_point_hits) > 0:
             majority_hits = np.mean(self.fin_point_hits)
