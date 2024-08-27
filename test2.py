@@ -99,8 +99,8 @@ class HelicoilDepthCheck:
             else:
                 # Check the conditions for updating the surface
                 if (
-                    new_surface_area >= self.previous_surface_area * 0.95
-                    and new_surface_area <= self.previous_surface_area * 1.05
+                    new_surface_area >= self.previous_surface_area * 0.97
+                    and new_surface_area <= self.previous_surface_area * 1.07
                 ):
                     # Update if the new surface area is within 5% of the previous area
                     self.previous_surface_coordinates = new_surface_coordinates
