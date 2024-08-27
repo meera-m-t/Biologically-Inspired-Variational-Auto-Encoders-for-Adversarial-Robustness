@@ -13,7 +13,6 @@ class HelicoilDepthCheck:
         interpolation_points: int = 2,
         pixel_thresh: int = 120,  # Threshold for fin point hit detection
         driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
-        hand_fin_far_thresh: int = 100000,  # Threshold for hand being far from fin
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -25,13 +24,11 @@ class HelicoilDepthCheck:
         self.surface_coordinates = None
         self.pixel_thresh = pixel_thresh
         self.driver_hand_thresh = driver_hand_thresh
-        self.hand_fin_far_thresh = hand_fin_far_thresh
         self.distances = []
         self.driver_hand_distances = []
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.should_draw_surface = False  # Condition to keep drawing the surface
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -77,30 +74,38 @@ class HelicoilDepthCheck:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
         else:
             print("No fin detected.")
-            self.should_draw_surface = False  # Reset the flag if no fin is detected
 
-    def _draw_surface(self, frame: np.ndarray):
-        """Draw the surface outline using the stored coordinates"""
-        if self.should_draw_surface and self.surface_coordinates is not None:
+    def _draw_surface(self, frame: np.ndarray, detections, surface_index: int):
+        """Draw the surface outline using the provided class index"""
+        if surface_index is not None:
+            # Using surface_index for surface
+            self.surface_coordinates = self._interpolate_polygon_points(
+                detections[0].obb.xyxyxyxy.cpu().numpy()[surface_index]
+            )
             # Draw the polygon outline for the surface class
             cv2.polylines(frame, [self.surface_coordinates.astype(np.int32)], isClosed=True, color=(0, 0, 255), thickness=2)
-        elif not self.should_draw_surface:
-            print("Surface is not drawn due to conditions not being met.")
+        else:
+            print("No surface detected.")
 
-    def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25, fin_index: int = 0) -> list[int]:
-        """Find the driver using OBB"""
-        detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 1:
-            obb = detections[0].obb.xyxyxyxy.cpu().numpy()[fin_index]
-            points = self._extract_obb_points(obb)
-            c_x = np.mean(points[:, 0])
-            c_y = np.mean(points[:, 1])
-            print(f"Driver detected at ({c_x}, {c_y}).")
-            # Draw the driver on the frame
-            for point in points:
-                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
-            return [int(c_x), int(c_y)]
-        print("No driver detected.")
+    def _find_driver(self, frame: np.ndarray, detections, fin_index: int, imgsz: int = 640, conf: float = 0.25) -> list[int]:
+        """Find the driver using OBB based on the fin_index"""
+        if fin_index is not None:
+            # Detect driver only if fin is detected
+            driver_detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
+            if driver_detections and hasattr(driver_detections[0], 'obb') and len(driver_detections[0].obb.xyxyxyxy.cpu().numpy()) > 1:
+                obb = driver_detections[0].obb.xyxyxyxy.cpu().numpy()[fin_index]
+                points = self._extract_obb_points(obb)
+                c_x = np.mean(points[:, 0])
+                c_y = np.mean(points[:, 1])
+                print(f"Driver detected at ({c_x}, {c_y}) based on fin index {fin_index}.")
+                # Draw the driver on the frame
+                for point in points:
+                    cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
+                return [int(c_x), int(c_y)]
+            print("No driver detected.")
+        else:
+            print("Fin not detected, skipping driver detection.")
+        
         return []
 
     def _find_hands(
@@ -152,10 +157,11 @@ class HelicoilDepthCheck:
         detections = self.fins_model(frame, verbose=False)
         fin_index, surface_index = self._process_detections(detections)
         self._find_fin(frame, detections, fin_index)
-        driver_coords = self._find_driver(frame, fin_index=fin_index)
+        self._draw_surface(frame, detections, surface_index)
+        driver_coords = self._find_driver(frame, detections, fin_index)
         hand_coords_list = self._find_hands(frame)
 
-        if driver_coords and hand_coords_list and self.fin_coordinates is not None:
+        if driver_coords and hand_coords_list:
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
@@ -166,21 +172,31 @@ class HelicoilDepthCheck:
                 if driver_hand_distance <= self.driver_hand_thresh:
                     self.frames_with_driver_hand_within_thresh += 1
 
-            # Compute distances between each hand and each fin point
-            for hand_coords in hand_coords_list:
-                distances_to_fin = np.sqrt(np.sum((np.array(self.fin_coordinates) - np.array(hand_coords)) ** 2, axis=1))
-                min_distance_to_fin = np.min(distances_to_fin)
-                print(f"Minimum distance between hand and fin: {min_distance_to_fin} pixels")
+            # Compute distances between driver and each fin point
+            distances_to_fin = self._compute_distance_to_fin(driver_coords)
+            if len(distances_to_fin) > 0:
+                min_distance = np.min(distances_to_fin)  # Store only the minimum distance
+                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
+                print(f"Minimum distance between driver and fin: {min_distance} pixels")
 
-                if min_distance_to_fin >= self.hand_fin_far_thresh:
-                    self.should_draw_surface = True  # Condition met, surface should be drawn
-                else:
-                    self.should_draw_surface = False  # Condition not met, stop drawing surface
-
-            # Draw surface if conditions are met
-            self._draw_surface(frame)
+            # Determine how many points on the fin outline are within the threshold
+            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
+            self.fin_point_hits.append(hits)
+            print(f"Number of fin points 'hit' by the driver: {hits}")
 
         self.total_frames_checked += 1
+
+    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
+        """Compute distances between the driver and each point on the fin outline"""
+        if driver_coords and self.fin_coordinates is not None:
+            distances = np.sqrt(
+                np.sum(
+                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
+                )
+            )
+            return distances
+
+        return np.array([])
 
     def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
         """Analyze each frame where the driver is detected."""
