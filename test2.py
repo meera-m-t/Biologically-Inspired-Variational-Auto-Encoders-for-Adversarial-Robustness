@@ -98,17 +98,15 @@ class HelicoilDepthCheck:
                 self.previous_surface_area = new_surface_area
             else:
                 # Check the conditions for updating the surface
-                if new_surface_area < self.previous_surface_area:
-                    # Update if the new surface area is smaller
-                    self.previous_surface_coordinates = new_surface_coordinates
-                    self.previous_surface_area = new_surface_area
-                elif new_surface_area <= 1.02 * self.previous_surface_area:
-                    # Update if the new surface area is larger but not more than 2% larger
+                if (
+                    new_surface_area >= self.previous_surface_area * 0.95
+                    and new_surface_area <= self.previous_surface_area * 1.05
+                ):
+                    # Update if the new surface area is within 5% of the previous area
                     self.previous_surface_coordinates = new_surface_coordinates
                     self.previous_surface_area = new_surface_area
                 else:
-                    print("New surface detection is more than 2% larger than the previous one. Keeping the previous detection.")
-
+                    print("New surface detection is either smaller or more than 5% larger. Keeping the previous detection.")
         else:
             print("No surface detected.")
         
