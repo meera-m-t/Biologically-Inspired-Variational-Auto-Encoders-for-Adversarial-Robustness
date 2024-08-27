@@ -156,7 +156,7 @@ class HelicoilDepthCheck:
         driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
-        if driver_coords and hand_coords_list:
+        if driver_coords and hand_coords_list and fin_index is not None:
             for hand_coords in hand_coords_list:
                 # Compute distance between driver and hand
                 driver_hand_distance = self._compute_distance(driver_coords, hand_coords)
