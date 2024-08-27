@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -29,8 +30,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.previous_box = None  # Store the previous yellow box
-        self.previous_fin_coordinates = None  # Store the previous fin coordinates for orientation check
+        self.previous_surface_coordinates = None  # Store the previous surface coordinates
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -74,29 +74,25 @@ class HelicoilDepthCheck:
             # Draw the interpolated points as circles on the frame with the assigned color
             for point in self.fin_coordinates:
                 cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=color, thickness=3)
-            
-            # Check for fin orientation change
-            if self.previous_fin_coordinates is not None:
-                if not np.allclose(self.fin_coordinates, self.previous_fin_coordinates, atol=5):
-                    self.surface_coordinates = None  # Clear surface coordinates if fin orientation changes
-            
-            self.previous_fin_coordinates = self.fin_coordinates
         else:
             print("No fin detected.")
 
     def _draw_surface(self, frame: np.ndarray, detections, surface_index: int):
         """Draw the surface outline using the provided class index"""
-        if self.surface_coordinates is None and surface_index is not None:
+        if surface_index is not None:
             # Using surface_index for surface
             self.surface_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[surface_index]
             )
-        
-        if self.surface_coordinates is not None:
-            # Draw the polygon outline for the surface class
-            cv2.polylines(frame, [self.surface_coordinates.astype(np.int32)], isClosed=True, color=(0, 0, 255), thickness=2)
+            # Store the first detected surface coordinates to keep them persistent
+            if self.previous_surface_coordinates is None:
+                self.previous_surface_coordinates = self.surface_coordinates
         else:
-            print("No surface detected or surface reset due to fin orientation change.")
+            print("No surface detected.")
+        
+        # If we have a stored surface (previous or current), draw it on the frame
+        if self.previous_surface_coordinates is not None:
+            cv2.polylines(frame, [self.previous_surface_coordinates.astype(np.int32)], isClosed=True, color=(0, 0, 255), thickness=2)
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
