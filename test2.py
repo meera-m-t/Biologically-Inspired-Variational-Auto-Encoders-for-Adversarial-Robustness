@@ -92,21 +92,10 @@ class HelicoilDepthCheck:
             )
             new_surface_area = self._calculate_area(new_surface_coordinates)
 
-            if self.previous_surface_coordinates is None:
-                # No previous surface detected, so store the first one
+            # If no previous surface, or the new surface area is larger, update the stored surface
+            if self.previous_surface_coordinates is None or new_surface_area > self.previous_surface_area:
                 self.previous_surface_coordinates = new_surface_coordinates
                 self.previous_surface_area = new_surface_area
-            else:
-                # Check the conditions for updating the surface
-                if (
-                    new_surface_area >= self.previous_surface_area * 0.97
-                    and new_surface_area <= self.previous_surface_area * 1.07
-                ):
-                    # Update if the new surface area is within 5% of the previous area
-                    self.previous_surface_coordinates = new_surface_coordinates
-                    self.previous_surface_area = new_surface_area
-                else:
-                    print("New surface detection is either smaller or more than 5% larger. Keeping the previous detection.")
         else:
             print("No surface detected.")
         
@@ -174,18 +163,6 @@ class HelicoilDepthCheck:
             return distance
         return float('inf')
 
-    def _compute_distance_to_fin(self, driver_coords: list[int]) -> np.ndarray:
-        """Compute distances between the driver and each point on the fin outline"""
-        if driver_coords and self.fin_coordinates is not None:
-            distances = np.sqrt(
-                np.sum(
-                    (np.array(self.fin_coordinates) - np.array(driver_coords)) ** 2, axis=1
-                )
-            )
-            return distances
-
-        return np.array([])
-
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
         detections = self.fins_model(frame, verbose=False)
@@ -207,99 +184,4 @@ class HelicoilDepthCheck:
                     self.frames_with_driver_hand_within_thresh += 1
 
             # Compute distances between driver and each fin point
-            distances_to_fin = self._compute_distance_to_fin(driver_coords)
-            if len(distances_to_fin) > 0:
-                min_distance = np.min(distances_to_fin)  # Store only the minimum distance
-                self.distances.append({"Time (seconds)": timestamp, "Distance (pixels)": min_distance})
-                print(f"Minimum distance between driver and fin: {min_distance} pixels")
-
-            # Determine how many points on the fin outline are within the threshold
-            hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
-            self.fin_point_hits.append(hits)
-            print(f"Number of fin points 'hit' by the driver: {hits}")
-
-        self.total_frames_checked += 1
-
-    def inspectHelicoilDepth(self, frame: np.ndarray, timestamp: float):
-        """Analyze each frame where the driver is detected."""
-        self._check_operator(frame, timestamp)
-
-    def final_decision(self) -> bool:
-        """Make the final decision based on driver-hand proximity and fin points hit."""
-        if len(self.fin_point_hits) > 0:
-            majority_hits = np.mean(self.fin_point_hits)
-            print(f"Average number of fin points 'hit': {majority_hits}")
-    
-            # Consider the driver's proximity to the hand in the decision
-            driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
-            print(f"Ratio of frames where driver is within threshold distance of hand: {driver_hand_ratio:.2f}")
-    
-            # Adjusting the thresholds for acceptance
-            if majority_hits >= 0.9 and driver_hand_ratio >= 0.12:
-                return True
-            
-        print("Final Decision: Helicoil depth check failed.")
-        return False
-
-    def save_distances_to_csv(self, output_csv_path: str):
-        """Save the distances and driver-hand distances to a CSV file"""
-        df = pd.DataFrame(self.distances)
-        df_hand = pd.DataFrame(self.driver_hand_distances)
-        
-        # Merge the distance and driver-hand distance DataFrames
-        df_combined = pd.concat([df, df_hand["Driver-Hand Distance (pixels)"]], axis=1)
-        
-        # Rename columns for clarity
-        df_combined.columns = ["Time (seconds)", "Distance (pixels)", "Driver-Hand Distance (pixels)"]
-        
-        df_combined.to_csv(output_csv_path, index=False)
-        print(f"Distances and driver-hand distances saved to {output_csv_path}")
-
-
-if __name__ == "__main__":
-    # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector1.pt", "models/hand_detector.pt", "models/driver.pt")
-
-    # This is just simulating grabbing frames from live stream
-    example_video_path = "data/large/correct/Mar-11_ 24_09_16_30-clip.mkv"
-    cap = cv2.VideoCapture(example_video_path)
-
-    # Set up video writer to save output in MKV format
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter('output.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
-
-    if not cap.isOpened():
-        raise ("Error opening video file")
-
-    frame_count = 0
-    fps = cap.get(cv2.CAP_PROP_FPS)  # Get the frames per second of the video
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Can't receive frame (stream end?). Exiting ...")
-            break
-
-        frame_count += 1
-        timestamp = frame_count / fps  # Calculate the time in seconds
-        print(f"Processing frame {frame_count} at {timestamp:.2f} seconds")
-
-        # Analyze each frame for helicoil depth check
-        helicoil_depth_check.inspectHelicoilDepth(frame, timestamp)
-
-        # Write the frame with visualization to the output video
-        out.write(frame)
-
-    # After processing all frames, make the final decision
-    if helicoil_depth_check.final_decision():
-        print("Final Decision: Helicoil depth check passed.")
-    else:
-        print("Final Decision: Helicoil depth check failed.")
-
-    # Save the distances to a CSV file
-    helicoil_depth_check.save_distances_to_csv("distances.csv")
-
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-    print("Finished processing video.")
+            distances_to
