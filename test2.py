@@ -29,6 +29,7 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
+        self.previous_box = None  # Store the previous yellow box
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -87,25 +88,20 @@ class HelicoilDepthCheck:
         else:
             print("No surface detected.")
 
-    def _find_driver(self, frame: np.ndarray, detections, fin_index: int, imgsz: int = 640, conf: float = 0.25) -> list[int]:
-        """Find the driver using OBB based on the fin_index"""
-        if fin_index is not None:
-            # Detect driver only if fin is detected
-            driver_detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
-            if driver_detections and hasattr(driver_detections[0], 'obb') and len(driver_detections[0].obb.xyxyxyxy.cpu().numpy()) > 1:
-                obb = driver_detections[0].obb.xyxyxyxy.cpu().numpy()[fin_index]
-                points = self._extract_obb_points(obb)
-                c_x = np.mean(points[:, 0])
-                c_y = np.mean(points[:, 1])
-                print(f"Driver detected at ({c_x}, {c_y}) based on fin index {fin_index}.")
-                # Draw the driver on the frame
-                for point in points:
-                    cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
-                return [int(c_x), int(c_y)]
-            print("No driver detected.")
-        else:
-            print("Fin not detected, skipping driver detection.")
-        
+    def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
+        """Find the driver using OBB"""
+        detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
+        if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
+            obb = detections[0].obb.xyxyxyxy.cpu().numpy()[0]
+            points = self._extract_obb_points(obb)
+            c_x = np.mean(points[:, 0])
+            c_y = np.mean(points[:, 1])
+            print(f"Driver detected at ({c_x}, {c_y}).")
+            # Draw the driver on the frame
+            for point in points:
+                cv2.circle(frame, (int(point[0]), int(point[1])), radius=3, color=(0, 0, 255), thickness=3)
+            return [int(c_x), int(c_y)]
+        print("No driver detected.")
         return []
 
     def _find_hands(
@@ -158,7 +154,7 @@ class HelicoilDepthCheck:
         fin_index, surface_index = self._process_detections(detections)
         self._find_fin(frame, detections, fin_index)
         self._draw_surface(frame, detections, surface_index)
-        driver_coords = self._find_driver(frame, detections, fin_index)
+        driver_coords = self._find_driver(frame)
         hand_coords_list = self._find_hands(frame)
 
         if driver_coords and hand_coords_list:
