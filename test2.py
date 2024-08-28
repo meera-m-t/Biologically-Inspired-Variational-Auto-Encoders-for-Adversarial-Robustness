@@ -11,8 +11,8 @@ class HelicoilDepthCheck:
         hand_detector_model_path: str,
         driver_detector_model_path: str,
         interpolation_points: int = 2,
-        pixel_thresh: int = 120,  # Threshold for fin point hit detection
-        driver_hand_thresh: int = 900,  # Threshold for driver-hand proximity
+        pixel_thresh: int = 220,  # Threshold for fin point hit detection
+        driver_hand_thresh: int = 1100,  # Threshold for driver-hand proximity
     ):
         self.fins_model = self._load_model(fins_detector_model_path)
         self.hand_model = self._load_model(hand_detector_model_path)
@@ -29,8 +29,6 @@ class HelicoilDepthCheck:
         self.fin_point_hits = []
         self.frames_with_driver_hand_within_thresh = 0
         self.total_frames_checked = 0
-        self.previous_surface_coordinates = None  # Store the previous surface coordinates
-        self.previous_surface_area = None  # Store the area of the previous surface detection
 
     def _load_model(self, model_path: str) -> YOLO:
         """Load model"""
@@ -77,31 +75,16 @@ class HelicoilDepthCheck:
         else:
             print("No fin detected.")
 
-    def _calculate_area(self, coordinates: np.ndarray) -> float:
-        """Calculate the area of the polygon formed by the given coordinates"""
-        if coordinates is not None and len(coordinates) > 0:
-            return cv2.contourArea(coordinates.astype(np.float32))
-        return 0.0
-
     def _draw_surface(self, frame: np.ndarray, detections, surface_index: int):
-        """Draw the surface outline using the provided class index"""
+        """Visualize the surface if detected"""
         if surface_index is not None:
-            # Using surface_index for surface
-            new_surface_coordinates = self._interpolate_polygon_points(
+            # Using surface_index for surface visualization
+            surface_coordinates = self._interpolate_polygon_points(
                 detections[0].obb.xyxyxyxy.cpu().numpy()[surface_index]
             )
-            new_surface_area = self._calculate_area(new_surface_coordinates)
-
-            # If no previous surface, or the new surface area is larger, update the stored surface
-            if self.previous_surface_coordinates is None or new_surface_area > self.previous_surface_area:
-                self.previous_surface_coordinates = new_surface_coordinates
-                self.previous_surface_area = new_surface_area
+            cv2.polylines(frame, [surface_coordinates.astype(np.int32)], isClosed=True, color=(0, 0, 255), thickness=2)
         else:
             print("No surface detected.")
-        
-        # If we have a stored surface (previous or current), draw it on the frame
-        if self.previous_surface_coordinates is not None:
-            cv2.polylines(frame, [self.previous_surface_coordinates.astype(np.int32)], isClosed=True, color=(0, 0, 255), thickness=2)
 
     def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
         """Find the driver using OBB"""
