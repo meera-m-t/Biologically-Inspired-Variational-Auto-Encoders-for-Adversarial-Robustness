@@ -86,7 +86,7 @@ class HelicoilDepthCheck:
         else:
             print("No surface detected.")
 
-    def _find_driver(self, frame: np.ndarray, imgsz: int =1024, conf: float = 0.7) -> list[int]:
+    def _find_driver(self, frame: np.ndarray, imgsz: int = 1024, conf: float = 0.7) -> list[int]:
         """Find the driver using OBB"""
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
@@ -175,8 +175,11 @@ class HelicoilDepthCheck:
 
             # Determine how many points on the fin outline are within the threshold
             hits = np.sum([d <= self.pixel_thresh for d in distances_to_fin])
-            self.fin_point_hits.append(hits)
-            print(f"Number of fin points 'hit' by the driver: {hits}")
+            # Normalize hits by the total number of fin points
+            total_fin_points = len(self.fin_coordinates)
+            hit_ratio = hits / total_fin_points
+            self.fin_point_hits.append(hit_ratio)  # Store hit ratio instead of raw hits
+            print(f"Proportion of fin points 'hit' by the driver: {hit_ratio}")
 
         self.total_frames_checked += 1
 
@@ -199,8 +202,9 @@ class HelicoilDepthCheck:
     def final_decision(self) -> bool:
         """Make the final decision based on driver-hand proximity and fin points hit."""
         if len(self.fin_point_hits) > 0:
+            # Calculate the average hit ratio (now between 0 and 1)
             majority_hits = np.mean(self.fin_point_hits)
-            print(f"Average number of fin points 'hit': {majority_hits}")
+            print(f"Average proportion of fin points 'hit': {majority_hits}")
     
             # Consider the driver's proximity to the hand in the decision
             driver_hand_ratio = self.frames_with_driver_hand_within_thresh / self.total_frames_checked
