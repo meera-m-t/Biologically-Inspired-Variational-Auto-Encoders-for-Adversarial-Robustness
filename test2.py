@@ -86,7 +86,7 @@ class HelicoilDepthCheck:
         else:
             print("No surface detected.")
 
-    def _find_driver(self, frame: np.ndarray, imgsz: int = 640, conf: float = 0.25) -> list[int]:
+    def _find_driver(self, frame: np.ndarray, imgsz: int =1024, conf: float = 0.7) -> list[int]:
         """Find the driver using OBB"""
         detections = self.driver_model(frame, imgsz=imgsz, conf=conf, verbose=False)
         if detections and hasattr(detections[0], 'obb') and len(detections[0].obb.xyxyxyxy.cpu().numpy()) > 0:
@@ -148,7 +148,7 @@ class HelicoilDepthCheck:
 
     def _check_operator(self, frame: np.ndarray, timestamp: float):
         """Determine if operator is moving hands near the driver. Checks driver position relative to fins and flags if close enough."""
-        detections = self.fins_model(frame, verbose=False)
+        detections = self.fins_model(frame,imgsz=1024,conf=0.3, verbose=False)
         fin_index, surface_index = self._process_detections(detections)
         self._find_fin(frame, detections, fin_index)
         self._draw_surface(frame, detections, surface_index)
@@ -230,15 +230,16 @@ class HelicoilDepthCheck:
 
 if __name__ == "__main__":
     # Initialize model
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector1.pt", "models/hand_detector.pt", "models/driver.pt")
+    i = 6
+    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector2.pt", "models/hand_detector.pt", "models/driver2.pt")
 
     # This is just simulating grabbing frames from live stream
-    example_video_path = "data/large/correct/066a8c18-7c7b-7951-8000-215fda47e19e-clip.mkv"
+    example_video_path = "data/large/small/incorrect_Small Gromo CAC - 5004-05269_clip copy.mkv"
     cap = cv2.VideoCapture(example_video_path)
 
     # Set up video writer to save output in MKV format
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter('output.mkv', fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
+    out = cv2.VideoWriter(f"results/video_output_{i}.mkv", fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
 
     if not cap.isOpened():
         raise ("Error opening video file")
