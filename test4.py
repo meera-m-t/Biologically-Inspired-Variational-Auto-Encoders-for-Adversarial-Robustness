@@ -38,7 +38,8 @@ class HelicoilDepthCheck:
         classes = detections[0].boxes.cls.cpu().numpy()  # YOLOv8 outputs classes
 
         for i, cls in enumerate(classes):
-            if cls == 0:  # Class 0: Driver
+            if cls == 1:  # Class 0: Driver
+                print("driver")
                 driver_index = i
 
         return driver_index
@@ -48,7 +49,7 @@ class HelicoilDepthCheck:
         tracks = self.tracker.update(detections[0], frame)
 
         for track in tracks:
-            if track.cls == 0:  # Class 0: Driver
+            if track.cls == 1:  # Class 0: Driver
                 self.driver_id = track.track_id  # Track driver ID
                 driver_box = track.xyxy.cpu().numpy()  # Driver bounding box
                 driver_coords = [(driver_box[0] + driver_box[2]) / 2, (driver_box[1] + driver_box[3]) / 2]  # Center point
@@ -126,7 +127,7 @@ class HelicoilDepthCheck:
 
 
 if __name__ == "__main__":
-    helicoil_depth_check = HelicoilDepthCheck("models/fin_detector2.pt", "models/driver-caliper.pt", pixel_thresh=700)
+    helicoil_depth_check = HelicoilDepthCheck("models/holes.pt", "models/driver-caliper.pt", pixel_thresh=700)
 
     example_video_path = "data/large/correct/066a8c18-7c7b-7951-8000-215fda47e19e-clip.mkv"
     cap = cv2.VideoCapture(example_video_path)
